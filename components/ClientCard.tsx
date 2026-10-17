@@ -1,47 +1,12 @@
-// One card per client check. Owner: Frontend.
-import { Button } from "@/components/ui/button";
-import type { CheckStatus, CheckWithClient } from "@/lib/types";
-
-const STATUS_STYLE: Record<CheckStatus, string> = {
-  queued: "border-zinc-300",
-  calling: "border-blue-400",
-  ok: "border-green-500 bg-green-50",
-  needs_human: "border-red-500 bg-red-50",
-  no_answer: "border-yellow-500 bg-yellow-50",
-  handled: "border-zinc-300 opacity-60",
-};
-
-type Props = {
-  check: CheckWithClient;
-  onAdvance: (id: string) => void;
-  onHandled: (id: string) => void;
-};
-
-export function ClientCard({ check, onAdvance, onHandled }: Props) {
+import { ArrowRight, Check, Clock3, Phone, UserRound, Zap } from "lucide-react";
+import type { CheckWithClient, EventMode } from "@/lib/types";
+type Props = { check: CheckWithClient; mode: EventMode; mockMode: boolean; busy?: boolean; onAdvance: (id: string) => void; onHandled: (id: string) => void };
+const STEPS = ["Call", "Retry", "Text", "Contact", "Human"];
+export function ClientCard({ check, mode, mockMode, busy = false, onAdvance, onHandled }: Props) {
   const { client } = check;
+  const urgent = check.status === "needs_human" && (mode === "crisis" || check.urgency === "urgent");
+  const tone = urgent ? "urgent" : check.status === "needs_human" || check.status === "no_answer" ? "amber" : check.status === "ok" ? "okay" : check.status === "calling" ? "calling" : "quiet";
+  const label = check.status === "needs_human" ? urgent ? "Needs a human now" : "Follow up" : ({ queued: "Queued", calling: "Calling now", ok: "Confirmed okay", no_answer: "No answer · following up", handled: "Handled by a person" }[check.status]);
   const actionable = check.status === "needs_human" || check.status === "no_answer";
-  // TODO(Frontend): tier badge with shadcn Badge, pulse on needs_human, final layout.
-  return (
-    <div className={`rounded-lg border-2 p-4 ${STATUS_STYLE[check.status]}`}>
-      <div className="flex items-center justify-between">
-        <div className="font-semibold">{client.name}</div>
-        <span className="text-xs uppercase">{client.risk_tier}</span>
-      </div>
-      <div className="mt-1 text-sm">
-        {check.status} · step {check.ladder_step}
-      </div>
-      {check.summary && <p className="mt-2 text-sm text-zinc-600">{check.summary}</p>}
-      {check.flag_reason && <p className="mt-1 text-sm text-red-700">{check.flag_reason}</p>}
-      {actionable && (
-        <div className="mt-3 flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => onAdvance(check.id)}>
-            Advance
-          </Button>
-          <Button size="sm" onClick={() => onHandled(check.id)}>
-            Mark handled
-          </Button>
-        </div>
-      )}
-    </div>
-  );
+  return <article className={`hb-client-card hb-card-${tone} ${urgent && mode === "crisis" ? "hb-pulse" : ""} ${check.status === "handled" ? "hb-card-handled" : ""}`}><div className="hb-card-status"><span><i />{label}</span><span className={`hb-tier hb-tier-${client.risk_tier}`}>{client.risk_tier === "red" ? "HIGH" : client.risk_tier === "yellow" ? "MEDIUM" : "STANDARD"} PRIORITY</span></div><div className="hb-client-title"><span className="hb-client-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><h3>{client.name}</h3><span><Phone size={10} />{client.phone || "Contact held by agency"}</span></div>{check.status === "ok" && <Check size={21} className="hb-okay-check" />}</div><div className="hb-client-facts">{client.lives_alone && <span><UserRound size={11} />Lives alone</span>}{client.uses_powered_equipment && <span><Zap size={11} />Powered equipment</span>}{client.needs_ride && <span className="hb-ride-badge">Needs a ride</span>}{client.language && client.language !== "en" && <span>{client.language === "es" ? "Spanish" : client.language === "ko" ? "Korean" : client.language}</span>}</div><div className="hb-client-summary">{check.flag_reason && <p className="hb-client-flag">{check.flag_reason}</p>}{check.summary && <p>{check.summary}</p>}{!check.summary && !check.flag_reason && <p className="hb-summary-empty">{check.status === "calling" ? "Waiting for the call outcome. No response has been confirmed." : check.status === "queued" ? "This client’s call is queued. Their current status is unknown." : "No additional source summary recorded."}</p>}</div><div className="hb-card-ladder"><div><span>FOLLOW-UP LADDER</span><span>STEP {check.ladder_step} / 4</span></div><ol aria-label={`Follow-up ladder at step ${check.ladder_step}`}>{STEPS.map((step, index) => <li key={step} className={index === check.ladder_step ? "hb-step-current" : index < check.ladder_step ? "hb-step-past" : ""}><span>{index < check.ladder_step ? <Check size={9} /> : index + 1}</span><small>{step}</small></li>)}</ol></div>{check.sms_status && <p className="hb-sms-status">{check.sms_status.replaceAll("_", " ")}</p>}{check.next_action_at && <div className="hb-next-time"><Clock3 size={11} />Next step at {new Date(check.next_action_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</div>}{actionable && <div className="hb-card-actions">{mockMode && check.ladder_step < 4 && <button className="hb-advance" disabled={busy} onClick={() => onAdvance(check.id)}>Advance (demo)<ArrowRight size={12} /></button>}<button className="hb-handle" disabled={busy} onClick={() => onHandled(check.id)}>{busy ? "Saving…" : "Mark handled"}<Check size={12} /></button></div>}<footer className="hb-card-footer"><span>{check.status === "handled" ? "Human handoff recorded" : "Latest source update"}</span><time dateTime={check.updated_at}>{new Date(check.updated_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</time></footer></article>;
 }

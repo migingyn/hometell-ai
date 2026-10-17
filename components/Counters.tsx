@@ -1,23 +1,12 @@
-// Four summary counters. Owner: Frontend.
-import type { CheckWithClient } from "@/lib/types";
-
-export function Counters({ checks }: { checks: CheckWithClient[] }) {
-  const count = (s: string) => checks.filter((c) => c.status === s).length;
-  // TODO(Frontend): style with shadcn Card and status colors.
+import type { CheckWithClient, EventMode } from "@/lib/types";
+export function Counters({ checks, mode }: { checks: CheckWithClient[]; mode: EventMode }) {
+  const urgent = checks.filter((check) => check.status === "needs_human" && (mode === "crisis" || check.urgency === "urgent")).length;
   const items = [
-    { label: "Okay", value: count("ok"), className: "bg-green-100 text-green-900" },
-    { label: "No answer", value: count("no_answer"), className: "bg-yellow-100 text-yellow-900" },
-    { label: "Needs a human", value: count("needs_human"), className: "bg-red-100 text-red-900" },
-    { label: "Handled", value: count("handled"), className: "bg-zinc-100 text-zinc-900" },
+    { label: "Confirmed okay", value: checks.filter((check) => check.status === "ok").length, note: "Client or contact confirmed", tone: "okay" },
+    { label: "Needs a human now", value: urgent, note: "Prioritize these calls", tone: "urgent" },
+    { label: "Follow up", value: checks.filter((check) => check.status === "needs_human").length - urgent, note: "Everyday requests for a person", tone: "amber" },
+    { label: "No answer", value: checks.filter((check) => check.status === "no_answer").length, note: "Keep the phone tree moving", tone: "amber" },
+    { label: "Handled", value: checks.filter((check) => check.status === "handled").length, note: "A person has taken over", tone: "quiet" },
   ];
-  return (
-    <div className="grid grid-cols-4 gap-3">
-      {items.map((i) => (
-        <div key={i.label} className={`rounded-lg p-4 ${i.className}`}>
-          <div className="text-3xl font-semibold">{i.value}</div>
-          <div className="text-sm">{i.label}</div>
-        </div>
-      ))}
-    </div>
-  );
+  return <section className="hb-counters" aria-label="Check-in totals">{items.map((item) => <div className={`hb-counter hb-counter-${item.tone}`} key={item.label}><span><i />{item.label}</span><strong>{String(item.value).padStart(2, "0")}</strong><small>{item.note}</small></div>)}</section>;
 }

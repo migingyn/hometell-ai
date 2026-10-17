@@ -4,6 +4,10 @@
 
 You are building a 24 hour hackathon MVP. Optimize for a working live demo, not production quality. Do not add features outside this document. Do not add auth, settings pages, or tests unless asked. Prefer simple code over clever code. When unsure, pick the option that is fastest to demo.
 
+## Current build scope
+
+The October 17 Heartbeat dual-use specification adds daily check-ins to this PRD. See `docs/HEARTBEAT_RUNBOOK.md` and `docs/RETELL_AGENTS.md` for the implemented modes, classifier, prompts, and rehearsal. Daily routine requests are amber follow-ups; hard-rule danger reports require a human immediately. Crisis alerts are supplied by a coordinator and read verbatim.
+
 ## Problem
 
 Home care agencies cannot reach every senior client fast during a heat wave or blackout. Nobody calls first. Seniors living alone are found hours or days later.
@@ -27,7 +31,6 @@ Heartbeat is an AI phone desk for home care agencies. A coordinator clicks one b
 ## Out of scope (do not build)
 
 - Login or auth
-- Daily reminder calls
 - Decision Inbox broadcast
 - Incident Stitcher
 - Caregiver shift coverage
@@ -127,7 +130,7 @@ Implementations
 
 Select with env var CLASSIFIER=retell or CLASSIFIER=llm.
 
-Hard rules run before any classifier. If the transcript contains chest pain, can't breathe, fell, fall, dizzy, confused, help, or emergency, set needs_human. Never let a model downgrade these.
+Hard rules scan only the person's transcript turns before any classifier. Both modes match chest pain, can't breathe, fell, fall, dizzy, confused, or emergency. Crisis mode also matches help, can't get out, can't leave, and trapped. Never let a model downgrade a hard-rule hit. Routine daily requests are follow-ups, without an urgent text.
 
 ## Retell agent script (crisis check)
 

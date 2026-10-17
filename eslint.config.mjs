@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "clinically-speaking/**",
+    "crisis/**",
+    "crisis-la/**",
+    "port-track/**",
   ]),
 ]);
 

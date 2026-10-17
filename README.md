@@ -1,8 +1,18 @@
+## Heartbeat: daily check-ins and crisis outreach
+
+The current product has two modes on the main Next.js dashboard: **Run morning check-ins** and **Start crisis check**. It uses Supabase for the roster, durable call results, and live updates; Retell for dedicated check-in agents; and Twilio for missed-call and coordinator texts. Research/delegated-agent tools remain separate from the check-in agents.
+
+Run `npm run dev:heartbeat` and open `http://localhost:3017`. Follow [the rehearsal runbook](docs/HEARTBEAT_RUNBOOK.md) for local Supabase, private teammate seeding, both mock flows, real-phone setup, and verification. [Exact Retell prompts](docs/RETELL_AGENTS.md) are saved for the demo video. `MOCK MODE` and fictional-client labels stay visible during simulation.
+
 # Heartbeat
 
 AI phone desk for home care agencies. A coordinator clicks one button. Heartbeat calls every senior client through Retell AI, highest risk first, and shows who is okay, who is silent, and who needs a human.
 
 See `PRD.md` for scope. This repo is a skeleton: routes, database, and dashboard are wired, and feature logic is stubbed with `TODO(<owner>)` comments.
+
+The live Retell call transport and internet-research tools are implemented. See [live voice setup](docs/LIVE_VOICE.md) for source-backed lookup, 3–5 parallel research workers, outbound contact verification, activation requirements, and current verification limits. The remaining check-in classifier, ladder, and SMS TODOs still need their own implementation.
+
+The consumer [prescription case room](docs/PRESCRIPTION_DEMO.md) runs at `http://localhost:5175/prescription`: inspect conflicting source statements, confirm receipt-linked handoffs, and reopen the case when evidence changes. Its live participant rooms work locally without provider keys; optional phone calling reports its actual configuration readiness.
 
 ## Setup
 

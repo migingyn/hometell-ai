@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Heartbeat",
-  description: "AI phone desk for home care agencies",
+  title: "Heartbeat · Every person, reached",
+  description: "Everyday check-ins and crisis outreach for home-care teams. A familiar call for every client, with people handling every concern.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
