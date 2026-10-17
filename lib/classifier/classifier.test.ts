@@ -44,6 +44,55 @@ test("daily help requests are follow-ups while shared danger words remain urgent
   }
 });
 
+test("Korean shared danger phrases are urgent in both modes and preserve the actual phrase", () => {
+  const samples = [
+    ["흉통이 있어요.", "흉통"], ["지금 가슴이 아파요.", "가슴이 아파"],
+    ["숨을 못 쉬겠어요.", "숨을 못 쉬"], ["숨을 못쉬겠어요.", "숨을 못쉬"],
+    ["방금 넘어졌어요.", "넘어졌"], ["너무 어지러워요.", "어지러"],
+    ["혼란스러워요.", "혼란"], ["응급 상황이에요.", "응급"],
+  ];
+  for (const mode of ["daily", "crisis"] as const) {
+    for (const [utterance, phrase] of samples) {
+      const result = checkHardRules(`User: ${utterance}`, mode);
+      assert.equal(result?.status, "needs_human");
+      assert.equal(result?.urgency, "urgent");
+      assert.equal(result?.flag_reason, `said "${phrase}"`);
+    }
+  }
+});
+
+test("Korean hard rules ignore agent speech, untagged text, and agent-only structured turns", () => {
+  const agentWords = "흉통, 가슴이 아파, 숨을 못 쉬, 넘어졌, 어지러, 혼란, 응급, 도움이 필요";
+  assert.equal(checkHardRules(`Agent: ${agentWords}\nUser: 괜찮아요.`), null);
+  assert.equal(checkHardRules("숨을 못 쉬겠어요."), null);
+  assert.equal(checkHardRules(call({}, {
+    transcript: "User: 숨을 못 쉬겠어요.",
+    transcript_object: [{ role: "agent", content: agentWords }, { role: "user", content: "괜찮아요." }],
+  })), null);
+});
+
+test("Korean routine daily help stays an ordinary follow-up while crisis help escalates", () => {
+  for (const phrase of ["도와주", "도움이 필요", "나갈 수 없", "갇혔"]) {
+    assert.equal(checkHardRules(`User: ${phrase}`, "daily"), null);
+    assert.equal(checkHardRules(`User: ${phrase}`, "crisis")?.flag_reason, `said "${phrase}"`);
+  }
+  const routine = classifyRetellAnalysis(call({ client_status: "needs_help", request: "이번 주 장보는 것을 도와주세요." }, {
+    transcript_object: [{ role: "agent", content: "오늘 필요한 것이 있나요?" }, { role: "user", content: "이번 주 장보는 것을 도와주세요." }],
+  }), { mode: "daily" });
+  assert.equal(routine.status, "needs_human");
+  assert.equal(routine.urgency, "follow_up");
+  assert.equal(routine.flag_reason, "이번 주 장보는 것을 도와주세요.");
+});
+
+test("a Korean user danger phrase cannot be downgraded by positive post-call fields", async () => {
+  const result = await classifyCall(call({ client_status: "ok" }, {
+    transcript_object: [{ role: "agent", content: "안녕하세요." }, { role: "user", content: "지금 숨을 못 쉬겠어요." }],
+  }), { mode: "daily" });
+  assert.equal(result.status, "needs_human");
+  assert.equal(result.urgency, "urgent");
+  assert.equal(result.flag_reason, 'said "숨을 못 쉬"');
+});
+
 test("hard rules precede voicemail, analysis, mock outcomes, and both classifier selectors", async () => {
   const danger = call({ client_status: "ok", contact_confirms_ok: true }, {
     transcript: "User: I feel dizzy.", disconnection_reason: "voicemail_reached",
@@ -109,4 +158,11 @@ test("mock overrides run only in explicit mock mode and preserve daily urgency",
 test("optional LLM selector uses structured Retell evidence without an extra provider", async () => {
   assert.equal((await llmClassifier.classify(call({ client_status: "ok" }))).status, "ok");
   assert.equal((await llmClassifier.classify(call({}))).status, "needs_human");
+});
+
+test("Korean prompt vocabulary shares the same conservative danger handoff", () => {
+  for (const content of ["가슴 통증이 있어요", "숨이 안 쉬어져요", "어지럽습니다"]) {
+    assert.equal(checkHardRules({ call_id: "ko-danger", transcript_object: [{ role: "user", content }] }, "daily")?.urgency, "urgent");
+  }
+  assert.equal(checkHardRules({ call_id: "ko-exit", transcript_object: [{ role: "user", content: "혼자 못 나가요" }] }, "crisis")?.status, "needs_human");
 });

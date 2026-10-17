@@ -6,7 +6,7 @@ import { createPhoneCall, getPhoneCall, placeCall, verifyWebhook } from "./retel
 import { buildLlmUpdate, configureVoiceAgent, validatePublicUrl } from "../scripts/configure-voice-agent";
 import { buildSeedClients } from "../scripts/seed";
 import { buildFakeWebhook } from "../scripts/fake-webhook";
-import { configureHeartbeatAgents, heartbeatAgentPlan, renderHeartbeatAgentDocs } from "../scripts/configure-heartbeat-agents";
+import { configureHeartbeatAgents, heartbeatAgentPlan, renderHeartbeatAgentDocs, HEARTBEAT_PROMPTS } from "../scripts/configure-heartbeat-agents";
 import type { Client } from "./types";
 
 const envKeys = ["RETELL_API_KEY", "RETELL_FROM_NUMBER", "RETELL_AGENT_ID", "VOICE_PUBLIC_URL", "HEARTBEAT_PUBLIC_URL", "APP_URL", "RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID"] as const;
@@ -361,4 +361,32 @@ test("Heartbeat dry-run tolerates local APP_URL and prioritizes its dedicated pu
   result = await configureHeartbeatAgents();
   assert.ok("missing" in result && !result.missing?.includes("HEARTBEAT_PUBLIC_URL (public HTTPS)"));
   assert.equal(request.mock.callCount(), 0);
+});
+
+test("fictional Harold Kim requests Korean by default while explicit private language choices win", () => {
+  const clients = buildSeedClients();
+  assert.equal(clients[1].name, "Harold Kim");
+  assert.equal(clients[1].language, "ko");
+  assert.ok(clients.filter((_, index) => index !== 1).every((client) => client.language === "en"));
+  const person = { name: "Consenting Teammate", consent: true, emergency_contact: { name: "Consenting Contact", phone: "+12025550103", consent: true } };
+  const explicit = buildSeedClients({ clients: [{ ...person, phone: "+12025550101" }, { ...person, phone: "+12025550102", language: "en" }] });
+  assert.equal(explicit[0].language, "en");
+  assert.equal(explicit[1].language, "en");
+});
+
+test("Korean check-in prompts disclose automation, hand off urgent reports, and preserve the original crisis alert", () => {
+  for (const mode of ["daily", "crisis"] as const) {
+    const plan = heartbeatAgentPlan(mode, "ko", "https://heartbeat.example.com");
+    assert.equal(plan.agent.language, "ko-KR");
+    assert.equal(plan.agent.max_call_duration_ms, 90_000);
+    assert.match(plan.llm.general_prompt, /자동 안부 확인/);
+    assert.match(plan.llm.general_prompt, /가슴이 아파요/);
+    assert.match(plan.llm.general_prompt, /숨을 못 쉬겠어요/);
+    assert.match(plan.llm.general_prompt, /담당자가 곧 전화드리도록/);
+  }
+  assert.match(HEARTBEAT_PROMPTS.ko.daily, /장보기나 일반 이동 지원 요청만으로 긴급 상황이라고 단정하지/);
+  assert.match(HEARTBEAT_PROMPTS.ko.crisis, /ORIGINAL LANGUAGE/);
+  assert.match(HEARTBEAT_PROMPTS.ko.crisis, /나갈 수 없어요/);
+  assert.ok(HEARTBEAT_PROMPTS.ko.crisis.includes("{{alert_text}}"));
+  assert.match(renderHeartbeatAgentDocs(), /Korean prompts have not been verified in a real phone call/);
 });

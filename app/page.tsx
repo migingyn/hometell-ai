@@ -8,5 +8,5 @@ export default function Page() {
 
 async function RequestDashboard() {
   await connection();
-  return <Dashboard agencyName={process.env.AGENCY_NAME ?? "Sunrise Home Care"} mockMode={process.env.MOCK_RETELL === "true"} fictionalData={process.env.FICTIONAL_CLIENTS !== "false"} />;
+  return <Dashboard agencyName={process.env.AGENCY_NAME ?? "Sunrise Home Care"} mockMode={process.env.MOCK_RETELL === "true"} fictionalData={process.env.FICTIONAL_CLIENTS !== "false"} liveMapUrl={process.env.NEXT_PUBLIC_HEARTBEAT_MAP_URL} />;
 }

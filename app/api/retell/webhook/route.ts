@@ -125,7 +125,9 @@ export async function POST(req: Request) {
 
     // P1: use an explicit boolean from a daily client answer; a missing field
     // never clears an existing ride need, and contacts cannot overwrite it.
-    if (mode === "daily" && meta.target === "client" && result.status !== "no_answer") {
+    const clientStatus = call.call_analysis?.custom_analysis_data?.client_status;
+    if (mode === "daily" && meta.target === "client" && result.status !== "no_answer" &&
+      (clientStatus === "ok" || clientStatus === "needs_help")) {
       const needsRide = call.call_analysis?.custom_analysis_data?.needs_ride;
       const { error: clientError } = await db.from("clients").update({
         last_daily_at: new Date().toISOString(),

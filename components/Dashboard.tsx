@@ -19,12 +19,13 @@ async function post(url: string, body?: unknown) {
 }
 async function fetchDashboard(): Promise<Data> {
   const db = supabaseBrowser();
-  const { data: event, error } = await db.from("events").select("*").order("started_at", { ascending: false }).limit(1).maybeSingle();
+  const signal = AbortSignal.timeout(6500);
+  const { data: event, error } = await db.from("events").select("*").order("started_at", { ascending: false }).limit(1).abortSignal(signal).maybeSingle();
   if (error) throw new Error(error.message);
   if (!event) return { event: null, checks: [] };
   const [{ data, error: checksError }, { data: clients, error: clientsError }] = await Promise.all([
-    db.from("checks").select("*").eq("event_id", event.id),
-    db.from("clients_public").select("*"),
+    db.from("checks").select("*").eq("event_id", event.id).abortSignal(signal),
+    db.from("clients_public").select("*").abortSignal(signal),
   ]);
   if (checksError) throw new Error(checksError.message);
   if (clientsError) throw new Error(clientsError.message);
@@ -32,7 +33,7 @@ async function fetchDashboard(): Promise<Data> {
   return { event: event as HeartbeatEvent, checks: ((data ?? []) as Check[]).flatMap((check) => { const client = roster.get(check.client_id); return client ? [{ ...check, client }] : []; }) };
 }
 
-export function Dashboard({ agencyName, mockMode, fictionalData }: { agencyName: string; mockMode: boolean; fictionalData: boolean }) {
+export function Dashboard({ agencyName, mockMode, fictionalData, liveMapUrl }: { agencyName: string; mockMode: boolean; fictionalData: boolean; liveMapUrl?: string }) {
   const [event, setEvent] = useState<HeartbeatEvent | null>(null);
   const [checks, setChecks] = useState<CheckWithClient[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -47,19 +48,25 @@ export function Dashboard({ agencyName, mockMode, fictionalData }: { agencyName:
   const [filter, setFilter] = useState<"all" | "attention" | "unreached">("all");
   const [lastSync, setLastSync] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  const generation = useRef(0);
+  const fetching = useRef(false);
+  const refreshQueued = useRef(false);
   const mode = event ? normalizeMode(event.type) : "daily";
   const crisis = mode === "crisis";
   const eventId = event?.id;
   const isMock = health?.mockMode ?? mockMode;
   const isFictional = health?.fictionalData ?? fictionalData;
   const load = useCallback(async () => {
-    const current = ++generation.current;
-    try {
-      const data = await fetchDashboard();
-      if (generation.current === current) { setEvent(data.event); setChecks(data.checks); setError(null); setLastSync(new Date().toISOString()); }
-    } catch (err) { if (generation.current === current) setError(err instanceof Error ? err.message : "The roster could not be loaded."); }
-    finally { if (generation.current === current) setLoading(false); }
+    if (fetching.current) { refreshQueued.current = true; return; }
+    fetching.current = true;
+    do {
+      refreshQueued.current = false;
+      try {
+        const data = await fetchDashboard();
+        setEvent(data.event); setChecks(data.checks); setError(null); setLastSync(new Date().toISOString());
+      } catch { setConnection("polling"); setError("Database connection unavailable. Showing the last received records; retrying automatically."); }
+      finally { setLoading(false); }
+    } while (refreshQueued.current);
+    fetching.current = false;
   }, []);
   useEffect(() => {
     const initial = window.setTimeout(() => { void load(); }, 0);
@@ -80,7 +87,7 @@ export function Dashboard({ agencyName, mockMode, fictionalData }: { agencyName:
   }, [load]);
   useEffect(() => {
     let active = true;
-    void fetch("/api/health", { cache: "no-store" }).then((response) => response.json()).then((result: ApiResult<Health>) => { if (active && result.ok) setHealth(result.data); }).catch(() => undefined);
+    void fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(8000) }).then((response) => response.json()).then((result: ApiResult<Health>) => { if (active && result.ok) setHealth(result.data); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
   useEffect(() => { if (connection !== "polling") return; const timer = window.setInterval(() => { void load(); }, 3000); return () => window.clearInterval(timer); }, [connection, load]);
@@ -118,7 +125,7 @@ export function Dashboard({ agencyName, mockMode, fictionalData }: { agencyName:
       {error && <div className="hb-error" role="alert"><span>{error}</span><button onClick={() => { void load(); }}>Retry connection</button><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
       <section className="hb-session-strip"><span className="hb-session-icon">{crisis ? <Moon size={20} /> : <Sun size={20} />}</span><div><span>{event ? "CURRENT CHECK-IN" : "READY WHEN YOU ARE"}</span><strong>{event ? crisis ? "Crisis response" : "Morning check-ins" : "Your next round starts here"}</strong></div>{event ? <><span className="hb-session-time"><Clock3 size={13} /><EventTimer startedAt={event.started_at} /></span><span className="hb-session-date">Started {new Date(event.started_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>{crisis && event.alert_text && <button className="hb-read-alert" onClick={() => setShowAlert(!showAlert)}>Read exact alert<ArrowRight size={13} /></button>}</> : <span className="hb-session-date">Morning support and crisis outreach, in one place.</span>}<span className={`hb-connection hb-${connection}`}><i />{connection === "realtime" ? "Realtime connected" : connection === "polling" ? "Polling every 3 seconds" : "Connecting…"}</span></section>
       {showAlert && event?.alert_text && <div className="hb-alert-receipt"><span>{event.alert_text === SAMPLE_ALERT ? "FICTIONAL SAMPLE ALERT" : "COORDINATOR-PROVIDED ALERT"} · READ WORD FOR WORD</span><blockquote>{event.alert_text}</blockquote></div>}
-      {health && <div className="hb-health"><span><i className={health.database ? "hb-health-ready" : ""} />Database {health.database ? "connected" : "unavailable"}</span><span>{isMock ? "Voice transport simulated" : health.retell.configured ? "Retell configured" : "Retell not configured"}</span><span>{isMock ? "SMS simulated" : health.sms.configured ? "SMS configured" : "Text not sent (SMS not configured)"}</span></div>}
+      {health && <div className="hb-health"><span><i className={health.database ? "hb-health-ready" : ""} />Database {health.database ? "connected" : "unavailable"}</span><span>{isMock ? "Voice transport simulated" : health.retell.configured ? "Retell configured" : "Retell not configured"}</span><span>{isMock ? "SMS simulated" : health.sms.configured ? "SMS configured" : "Text not sent (SMS not configured)"}</span>{liveMapUrl && <a className="hb-map-link" href={liveMapUrl} target="_blank" rel="noreferrer">Open live LA map ↗</a>}</div>}
       <Counters checks={checks} mode={mode} />
       <section className="hb-roster"><div className="hb-roster-heading"><div><span className="hb-eyebrow">EVERY PERSON COUNTS</span><h2>Your check-in board<span>{checks.length}</span></h2></div><div className="hb-filters" aria-label="Filter check-ins">{([['all', 'Everyone'], ['attention', `Needs attention${attention ? ` · ${attention}` : ''}`], ['unreached', 'Not yet reached']] as const).map(([value, label]) => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}</div></div><div className="hb-card-grid">{sorted.map((check) => <ClientCard key={check.id} check={check} mode={mode} mockMode={isMock} busy={pending === check.id} onAdvance={(id) => act(`/api/ladder/advance/${id}`, id)} onHandled={(id) => act(`/api/checks/${id}/handled`, id)} />)}</div>
       {loading && <div className="hb-empty"><Users size={27} /><h3>Connecting to your client list</h3><p>Source records will appear when the database responds.</p></div>}

@@ -7,7 +7,7 @@ export async function GET() {
   await connection();
   let database = false;
   try {
-    const { error } = await supabaseAdmin().from("clients").select("id").limit(1);
+    const { error } = await supabaseAdmin().from("clients").select("id").limit(1).abortSignal(AbortSignal.timeout(5000));
     database = !error;
   } catch { /* setup state is shown below */ }
   const retellMissing = ["RETELL_API_KEY", "RETELL_FROM_NUMBER"].filter((key) => !process.env[key]?.trim());

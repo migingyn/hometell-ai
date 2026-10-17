@@ -89,6 +89,57 @@ async function verifyPrivacy() {
   assert.ok(publicRoster.data!.every((row) => Object.keys(row).every((name) => !/phone|telephone|mobile/i.test(name))), "The public roster must have no telephone number columns.");
 }
 
+async function verifyDailyPlanning(): Promise<{ eventId: string; assertions: string[] }> {
+  const db = supabaseAdmin();
+  const { data: harold, error } = await db.from("clients").select("id,needs_ride,last_daily_at").eq("name", "Harold Kim").single();
+  if (error || !harold) throw new Error("The focused daily-planning regression needs fictional Harold Kim in the roster.");
+  // Keep the live rehearsal prepared for the next crisis ride-priority check.
+  const prepared = await db.from("clients").update({ needs_ride: true }).eq("id", harold.id);
+  if (prepared.error) throw new Error("Could not prepare the fictional client's existing ride need.");
+  const started = await startMode("daily");
+  assert.equal(started.mockMode, true);
+  const { data: selected, error: checkError } = await db.from("checks").select("*,client:clients(*)")
+    .eq("event_id", started.event.id).eq("client_id", harold.id).single();
+  if (checkError || !selected) throw new Error("Could not select Harold's new daily check.");
+  const check = selected as unknown as CheckWithClient;
+  const readPlanning = async () => {
+    const row = await db.from("clients").select("needs_ride,last_daily_at").eq("id", harold.id).single();
+    if (row.error || !row.data) throw new Error("Could not read persisted daily planning fields.");
+    return row.data;
+  };
+  const before = await readPlanning();
+  const unclear = buildFakeWebhook(check, "unclear", "client", "daily");
+  unclear.call.call_analysis!.custom_analysis_data!.needs_ride = false;
+  await webhook(unclear);
+  const preserved = await readPlanning();
+  assert.equal(preserved.needs_ride, true, "An unclear or third-party answer cannot clear an existing ride need.");
+  assert.equal(preserved.last_daily_at, before.last_daily_at, "An unclear call is not a completed personal daily check-in.");
+
+  const confirmed = async (needsRide: boolean) => {
+    // A new explicitly simulated attempt allows the real duplicate/stale guards
+    // to remain active without making a second complete roster call.
+    const callId = `mock_${randomUUID()}`;
+    const queued = await db.from("checks").update({ status: "calling", last_call_id: callId, handled_at: null })
+      .eq("id", check.id);
+    if (queued.error) throw new Error("Could not prepare the next explicit mock daily answer.");
+    const current = await readCheck(check.id);
+    await webhook(buildFakeWebhook(current, needsRide ? "needs_ride" : "ok", "client", "daily"));
+    const after = await readPlanning();
+    assert.equal(after.needs_ride, needsRide, "A confirmed client mobility answer must persist its explicit boolean.");
+    assert.ok(after.last_daily_at);
+  };
+  await confirmed(false);
+  await confirmed(true);
+  const assertions = ["unclear client_status with needs_ride=false preserves existing true and last_daily_at", "confirmed client_status=ok persists false", "confirmed client_status=needs_help persists true", "Harold ends with needs_ride=true for crisis ride-priority verification"];
+  await mkdir(resolve("output/heartbeat"), { recursive: true });
+  await writeFile(resolve("output/heartbeat/daily-planning-verification.json"), JSON.stringify({
+    completedAt: new Date().toISOString(), eventId: started.event.id, mode: "MOCK MODE", database: "actual Supabase persistence",
+    outboundCallsPlaced: false, outboundTextsSent: false, assertions,
+  }, null, 2));
+  console.log("Daily planning: unclear false preserved the existing ride need; confirmed false and true persisted. Harold remains needs_ride=true.");
+  return { eventId: started.event.id, assertions };
+}
+
 async function verifyMode(mode: EventMode, started: StartedEvent): Promise<ModeReport> {
   const began = Date.now();
   assert.equal(started.mockMode, true, "Verification must never place live calls.");
@@ -242,6 +293,7 @@ async function main() {
   const roster = await supabaseAdmin().from("clients").select("id", { count: "exact", head: true });
   if (roster.error || (roster.count ?? 0) < 7) throw new Error("Seed at least seven fictional clients before verification. No event was started.");
   await verifyPrivacy();
+  if (process.argv.includes("--daily-planning-only")) { await verifyDailyPlanning(); return; }
   const startedAt = new Date().toISOString();
   // Initial batch dispatch is serialized; separate event IDs then allow the two
   // persisted no-answer ladders to run concurrently without overlapping dispatch.

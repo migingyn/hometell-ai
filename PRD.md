@@ -1,241 +1,101 @@
-# PRD. Heartbeat
+# Heartbeat product scope
 
-## Context for coding agents
+## Product and users
 
-You are building a 24 hour hackathon MVP. Optimize for a working live demo, not production quality. Do not add features outside this document. Do not add auth, settings pages, or tests unless asked. Prefer simple code over clever code. When unsure, pick the option that is fastest to demo.
+Heartbeat is a phone check-in desk for an agency's enrolled clients. The same roster receives ordinary morning check-ins and coordinator-triggered crisis outreach. The coordinator uses the dashboard; clients and their listed emergency contacts use a regular telephone.
 
-## Current build scope
+The product records reported needs and ensures unresolved outreach reaches a person. It does not judge medical conditions, decide whether someone should evacuate, assure anyone they are safe, or dispatch emergency services. Hackathon display identities and map points are fictional; real dialing requires consenting teammates' private numbers.
 
-The October 17 Heartbeat dual-use specification adds daily check-ins to this PRD. See `docs/HEARTBEAT_RUNBOOK.md` and `docs/RETELL_AGENTS.md` for the implemented modes, classifier, prompts, and rehearsal. Daily routine requests are amber follow-ups; hard-rule danger reports require a human immediately. Crisis alerts are supplied by a coordinator and read verbatim.
+## Two modes
 
-## Problem
+| Behavior | Daily check-in | Crisis check |
+| --- | --- | --- |
+| Start | **Run morning check-ins** | **Start crisis check**, with required alert text |
+| Agent task | Ask about wellbeing, morning medication, ordinary needs, and a way to leave quickly | Read the coordinator's alert word for word, then ask whether the person is okay and needs help leaving |
+| Routine request | Amber **Follow up**; no immediate coordinator text | Urgent **Needs a human now** and coordinator text |
+| Hard-rule danger phrase | Urgent **Needs a human now** and coordinator text | Same |
+| No pickup | Retry → client text → emergency contact → human handoff | Same |
 
-Home care agencies cannot reach every senior client fast during a heat wave or blackout. Nobody calls first. Seniors living alone are found hours or days later.
+`daily` and `crisis` are canonical event modes; legacy `heat_wave` is treated as crisis. Daily danger reports remain urgent even though ordinary daily requests are follow-ups. Terminal unreachable cases notify the coordinator in either mode.
 
-## Solution
+## Call outcomes and hard rules
 
-Heartbeat is an AI phone desk for home care agencies. A coordinator clicks one button. Heartbeat calls every client through Retell AI, highest risk first. Clients who answer and sound fine turn green. Clients who report danger get escalated to a human. Clients who do not answer climb a no-pickup ladder until a human takes over.
+Hard rules inspect structured `transcript_object` turns whose role is `user`; when unavailable, they parse `User:` transcript lines. Agent speech and untagged text cannot trigger a match. English matching handles word boundaries, case, and curly apostrophes.
 
-## Users
+Both modes match `chest pain`, `can't breathe`, `fell`, `fall`, `dizzy`, `confused`, and `emergency`. Crisis additionally matches `help`, `can't get out`, `can't leave`, and `trapped`. Narrow Korean phrase stems are also supported: shared danger phrases in both modes and help/blocked-exit phrases only in crisis. Flags retain the actual matched Korean phrase. These literal rules are not comprehensive language or medical interpretation.
 
-- **Coordinator.** Only user of the web app. Overnight staff at a home care agency.
-- **Client.** Senior who receives phone calls. Never touches the app.
-- **Emergency contact.** Family member who may receive a call in the ladder.
+Classification then follows this order:
 
-## Non-negotiable features
+1. A hard-rule hit always produces urgent `needs_human` and cannot be downgraded by post-call analysis.
+2. Voicemail, no answer, busy, or a failed dial produces `no_answer`.
+3. A client call uses explicit `client_status`: `ok` → `ok`; `needs_help` → `needs_human` with the request; missing or `unclear` → `needs_human` for review. Ordinary daily results use `follow_up` urgency; crisis results use `urgent`.
+4. An emergency-contact call becomes `ok` only when `contact_confirms_ok` is the boolean `true`. Its summary names the confirming contact. Otherwise it remains `no_answer`.
 
-1. **Crisis trigger with risk-tiered batch calling**
-2. **No-pickup ladder with voicemail counted as no answer**
-3. **Live dashboard** showing who is okay, who is silent, and who needs a human
-
-## Out of scope (do not build)
-
-- Login or auth
-- Decision Inbox broadcast
-- Incident Stitcher
-- Caregiver shift coverage
-- Multiple agencies or tenants
-- Editing clients in the UI (seed via script)
-- Mobile layout polish
-
-## Tech stack
-
-- **Framework.** Next.js 14+ App Router, TypeScript
-- **UI.** Tailwind CSS, shadcn/ui
-- **Database.** Supabase Postgres with Realtime
-- **Voice.** Retell AI (outbound calls, webhooks, post-call analysis)
-- **SMS.** Twilio (or Retell SMS if confirmed working)
-- **Classifier.** Pluggable. Default uses Retell post-call analysis. Optional LLM classifier behind the same interface
-- **Hosting.** Vercel. ngrok for local webhook testing
-
-## Data model (Supabase)
-
-### clients
-- id (uuid, pk)
-- name (text)
-- phone (text, E.164)
-- risk_tier (text, one of red, yellow, green)
-- lives_alone (bool)
-- uses_powered_equipment (bool)
-- emergency_contact_name (text)
-- emergency_contact_phone (text, E.164)
-- usual_pickup_time (time, nullable, display only for MVP)
-
-### checks
-One row per client per crisis event.
-- id (uuid, pk)
-- event_id (uuid, fk events)
-- client_id (uuid, fk clients)
-- status (text, see states below)
-- ladder_step (int, 0 to 4)
-- next_action_at (timestamptz, nullable)
-- last_call_id (text, nullable, Retell call id)
-- summary (text, nullable)
-- flag_reason (text, nullable)
-- handled_at (timestamptz, nullable)
-- updated_at (timestamptz)
-
-### events
-- id (uuid, pk)
-- type (text, e.g. heat_wave)
-- started_at (timestamptz)
-
-### call_logs
-- id (uuid, pk)
-- check_id (uuid, fk checks)
-- retell_call_id (text)
-- target (text, one of client, emergency_contact)
-- outcome (text)
-- transcript (text, nullable)
-- raw (jsonb)
-- created_at (timestamptz)
-
-Enable Realtime on checks.
-
-## Check states
-
-- queued. Waiting to be called
-- calling. Call in progress
-- ok. Client answered and sounds fine (green)
-- needs_human. Client reported danger or confusion (red)
-- no_answer. Did not answer or voicemail (yellow, ladder active)
-- handled. Coordinator marked it resolved
+The summary comes from Retell's call analysis; a connected call or positive summary alone cannot establish wellbeing. `CLASSIFIER=retell` is the default. The legacy `llm` selector uses the same structured Retell evidence; there is no separate model provider or `LLM_API_KEY` requirement in the implemented path.
 
 ## No-pickup ladder
 
-Applies only when status is no_answer.
+Only an unanswered, unhandled check can advance.
 
-| Step | Action | Delay after previous step |
+| Step | Action | Result |
 | --- | --- | --- |
-| 1 | Retry call to client | 5 min |
-| 2 | Send SMS to client | 5 min |
-| 3 | Call emergency contact | 5 min |
-| 4 | Flag as needs_human with reason "unreachable" | 5 min |
+| 0 | Initial client call | Await its analyzed result |
+| 1 | Retry the client | Save the new call ID and await its webhook |
+| 2 | Text the client | Keep the check unanswered and schedule the next step |
+| 3 | Call the listed emergency contact | Await explicit confirmation or continue unanswered |
+| 4 | Flag `unreachable` and text the coordinator | Urgent human handoff; no further automatic steps |
 
-Rules
-- Voicemail always counts as no answer
-- If the client answers at any step, run the classifier and set ok or needs_human
-- If the emergency contact says the client is okay, set ok and store the summary
-- Delays are multiplied by DEMO_TIME_SCALE (e.g. 0.05 makes 5 min about 15 sec)
+Each waiting interval is five minutes multiplied by `DEMO_TIME_SCALE`; `0.05` produces about 15 seconds. Daily texts contain the missed-check-in callback request. Crisis texts preserve the supplied alert and append the missed-call callback request.
 
-## Classifier
+Action claims prevent concurrent ticks from dispatching a step twice. Old call IDs and duplicate analyzed-call results cannot overwrite the current attempt. **Mark handled** wins over late results. A claim abandoned for more than three minutes becomes an urgent uncertain-outcome handoff without automatic redial. SMS errors do not prevent check status from being saved; the dashboard shows a sent/acceptance, simulated, missing-configuration, or failure note.
 
-Interface
-- Input. Retell call payload (transcript, analysis fields, disconnection reason)
-- Output. One of ok, needs_human, no_answer, plus a one-line summary and flag_reason
+## Planning and Korean agents
 
-Implementations
-- RetellAnalysisClassifier (default). Uses Retell post-call analysis fields and disconnection reason
-- LLMClassifier (optional). Sends transcript to an LLM with a strict JSON schema
+Daily client analysis may explicitly update `needs_ride`; a missing field does not clear a previous need and emergency contacts cannot overwrite it. The daily result also updates `last_daily_at`. Crisis ordering uses risk tier first, then ride need, living alone, and name; daily ordering uses risk tier and name.
 
-Select with env var CLASSIFIER=retell or CLASSIFIER=llm.
+Clients have a requested language. English daily/crisis agents and optional Korean daily/crisis variants use dedicated IDs. Missing Korean IDs fall back to the corresponding English agent. Korean introductions and questions do not translate or alter the coordinator's alert. All prompts disclose automation, avoid advice, end clearly, and use a 90-second provider limit. The setup script creates or updates drafts; publishing and real-phone rehearsal remain separate steps. Exact prompts and analysis schemas are in [RETELL_AGENTS.md](docs/RETELL_AGENTS.md).
 
-Hard rules scan only the person's transcript turns before any classifier. Both modes match chest pain, can't breathe, fell, fall, dizzy, confused, or emergency. Crisis mode also matches help, can't get out, can't leave, and trapped. Never let a model downgrade a hard-rule hit. Routine daily requests are follow-ups, without an urgent text.
+## Dashboard and map
 
-## Retell agent script (crisis check)
+The main dashboard runs locally at [localhost:3017](http://localhost:3017). It shows mode, risk, requested language, ride need, status, summaries, flags, ladder progress, SMS notes, and source update time. Urgent cards are red; ordinary daily follow-ups are amber. Crisis urgent cards pulse. **Advance (demo)** is available only in explicit mock mode; **Mark handled** records the human handoff.
 
-Greeting. "Hi, is this {{name}}? This is Heartbeat calling for {{agency_name}} to check on you during the heat wave."
+Supabase Realtime drives updates, with three-second polling when the channel fails. The open dashboard sends the five-second ladder tick; no hosted scheduler is configured. Mock mode and fictional data remain visibly labeled.
 
-If wrong person. Ask if {{name}} is okay and if they can come to the phone. If not, end and mark needs_human with reason "wrong person answered".
+The P1 LA map is a separate read-only surface at [localhost:5175/heartbeat](http://localhost:5175/heartbeat), using approximate fictional locations and current roster/check status. Its end-to-end verification is pending. Existing SourceCheck replay routes are preserved.
 
-Questions
-1. Do you have air conditioning or a cool place to stay?
-2. Do you have water nearby?
-3. Are you feeling dizzy, sick, or confused at all?
+## Data model and access
 
-Rules
-- Never tell the client they are safe
-- If they mention any danger sign, say a person from the agency will call them right away, then end the call
-- Keep the call under 90 seconds
+| Record | Fields used by Heartbeat |
+| --- | --- |
+| `clients` | `id`, fictional `name`, private `phone`, `risk_tier`, `lives_alone`, `uses_powered_equipment`, listed emergency-contact name/private phone, `usual_pickup_time`, `language`, `needs_ride`, `last_daily_at`, nullable fictional `lat`/`lng` |
+| `events` | `id`, `type`, `alert_text`, `started_at`, unique nullable `request_id`, `dispatching` |
+| `checks` | Client/event IDs, `status`, `ladder_step`, `next_action_at`, `last_call_id`, `summary`, `flag_reason`, nullable `urgency`, `sms_status`, `handled_at`, `updated_at`, internal `action_token`/`action_started_at` |
+| `call_logs` | Check ID, unique Retell call ID, target, outcome, transcript, raw payload, creation time |
+| `clients_public` | Read-only dashboard projection with fictional identities and planning fields; no telephone columns |
 
-Dynamic variables. name, agency_name.
+Statuses are `queued`, `calling`, `ok`, `needs_human`, `no_answer`, and `handled`. Urgency is `urgent`, `follow_up`, or null. Anonymous base-roster reads return no rows; server code uses the service role. Additive migrations live in `supabase/migrations/`. Default seeding preserves existing data; `--replace` is an explicit rehearsal reset.
 
-Verify in Retell docs. Voicemail detection setting, post-call analysis fields, disconnection reasons, transfer support, batch call API.
+## HTTP contract
 
-## API routes
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /api/health` | Database/configuration and mock readiness; does not establish provider delivery |
+| `POST /api/events/start` | Accept `{ type, alert_text?, request_id? }`; require crisis alert text; reserve one start and persist each requested call |
+| `POST /api/retell/webhook` | Verify live signatures, classify analyzed calls, atomically save one result/log, then update SMS/planning notes |
+| `POST /api/ladder/tick` | Recover abandoned claims and advance due unanswered checks |
+| `POST /api/ladder/advance/:checkId` | Advance one unanswered check immediately |
+| `POST /api/checks/:id/handled` | Record coordinator handling and clear the scheduled next step |
 
-- POST /api/events/start. Create event, create a checks row per client with status queued, then start calls in order red, yellow, green
-- POST /api/retell/webhook. Receive call events. Write call_logs. Run classifier. Update check status and ladder fields
-- POST /api/ladder/tick. Find checks where next_action_at <= now and run the next ladder step. Idempotent
-- POST /api/ladder/advance/:checkId. Demo fallback. Run the next step immediately
-- POST /api/checks/:id/handled. Mark handled
+Routes return `{ ok: true, data }` or `{ ok: false, error }`. Reusing a start `request_id` returns its existing event. Overlapping roster dispatches are rejected. Call and SMS transport errors never become invented successful outcomes.
 
-The dashboard calls /api/ladder/tick every 5 seconds while an event is active. No cron needed.
+## Implementation and verification
 
-## Dashboard (single page at /)
+The stack is Next.js 16 App Router, TypeScript, React, Tailwind/shadcn, Supabase Postgres/Realtime, Retell calls, and Twilio REST SMS. Credentials remain server-side. Dedicated check-in agents have no research/custom tools; Exa and delegated-contact tools are separate and not required for this product flow.
 
-Top bar
-- Agency name
-- Button "Start heat wave check"
-- Active event timer
+P0 passed against actual local Supabase and HTTP routes with simulated Retell payloads in both modes: okay, danger, daily follow-up, full due-time ladder, emergency-contact confirmation, handled/late results, duplicate/stale events, concurrent advancement, start idempotency, private-roster access, and abandoned-claim recovery. See [the runbook](docs/HEARTBEAT_RUNBOOK.md#verification) and `output/heartbeat/verification.json` for evidence and current test status.
 
-Four summary counters
-- Okay (green)
-- No answer (yellow)
-- Needs a human (red)
-- Handled
+Real Retell ringing, Korean phone conversations, verbatim alert playback over a real call, and Twilio delivery are not yet verified. Provider configuration and draft creation do not satisfy those acceptance criteria.
 
-Client grid
-- One card per client, sorted red tier first
-- Card shows name, risk tier badge, status color, ladder step, last summary
-- Red cards pin to top and pulse
-- Buttons on red and yellow cards. "Advance" (demo) and "Mark handled"
+## Remaining limits and exclusions
 
-Updates arrive through Supabase Realtime. No page refresh.
-
-## Environment variables
-
-- NEXT_PUBLIC_SUPABASE_URL
-- NEXT_PUBLIC_SUPABASE_ANON_KEY
-- SUPABASE_SERVICE_ROLE_KEY
-- RETELL_API_KEY
-- RETELL_AGENT_ID
-- RETELL_FROM_NUMBER
-- TWILIO_ACCOUNT_SID
-- TWILIO_AUTH_TOKEN
-- TWILIO_FROM_NUMBER
-- COORDINATOR_PHONE
-- CLASSIFIER (retell or llm)
-- LLM_API_KEY (only if CLASSIFIER=llm)
-- DEMO_TIME_SCALE (default 1, demo 0.05)
-- AGENCY_NAME
-
-## Seed data
-
-Script at scripts/seed.ts. Ten clients using teammates' real phone numbers. Three red, four yellow, three green. Emergency contacts also teammates.
-
-## Folder structure
-
-- app/page.tsx. Dashboard
-- app/api/events/start/route.ts
-- app/api/retell/webhook/route.ts
-- app/api/ladder/tick/route.ts
-- app/api/ladder/advance/[checkId]/route.ts
-- app/api/checks/[id]/handled/route.ts
-- lib/supabase.ts
-- lib/retell.ts
-- lib/sms.ts
-- lib/ladder.ts
-- lib/classifier/index.ts
-- lib/classifier/hardRules.ts
-- lib/classifier/retell.ts
-- lib/classifier/llm.ts
-- components/ClientCard.tsx
-- components/Counters.tsx
-- scripts/seed.ts
-
-## Acceptance criteria for demo
-
-- [ ] Clicking start places real calls to all 10 seeded phones, red tier first
-- [ ] A client saying "I feel dizzy" turns red within 10 seconds of hangup and the coordinator phone gets an SMS
-- [ ] A declined or voicemail call turns yellow and climbs all 4 ladder steps on screen with DEMO_TIME_SCALE=0.05
-- [ ] Emergency contact saying "she's fine" turns the card green
-- [ ] Mark handled moves the card to the handled counter
-- [ ] Dashboard updates live without refresh
-
-## Fallbacks
-
-- If live transfer to a human fails, send SMS to COORDINATOR_PHONE and pin the card red
-- If Retell batch call fails, loop single create-phone-call requests
-- If Realtime fails, poll checks every 3 seconds
-- Record a full demo video by hour 20
+This is a single-coordinator hackathon build without login, a hosted follow-up scheduler, inbound callback matching, multiple agencies, a client-editing UI, emergency dispatch, or medical/evacuation decisions. The coordinator remains responsible for human follow-up and provider review when outcomes are uncertain. Use [the runbook](docs/HEARTBEAT_RUNBOOK.md) for setup, rehearsal, and real-provider checks.

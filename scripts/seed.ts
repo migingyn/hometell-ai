@@ -80,7 +80,7 @@ const E164 = /^\+[1-9]\d{7,14}$/;
 const Participant = z.object({
   name: z.string().trim().min(1).max(100), phone: z.string().regex(E164), consent: z.literal(true),
   emergency_contact: z.object({ name: z.string().trim().min(1).max(100), phone: z.string().regex(E164), consent: z.literal(true) }).strict(),
-  language: z.enum(["en", "ko"]).default("en"),
+  language: z.enum(["en", "ko"]).optional(),
 }).strict();
 const LocalSeed = z.object({ clients: z.array(Participant).min(1).max(10) }).strict();
 
@@ -93,7 +93,7 @@ export function buildSeedClients(local?: unknown): Omit<Client, "id">[] {
     ...client,
     phone: people?.[index].phone ?? client.phone,
     emergency_contact_phone: people?.[index].emergency_contact.phone ?? client.emergency_contact_phone,
-    language: people?.[index].language ?? "en", needs_ride: false, last_daily_at: null,
+    language: people?.[index].language ?? (index === 1 ? "ko" : "en"), needs_ride: false, last_daily_at: null,
     // Approximate fictional map points, never participant home addresses.
     lat: 34.184 + Math.floor(index / 3) * 0.004, lng: -118.158 + (index % 3) * 0.004,
   }));
