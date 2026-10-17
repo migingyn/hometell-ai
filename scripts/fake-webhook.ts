@@ -1,86 +1,77 @@
-// Sends a fake Retell call_analyzed webhook to the local app. Owner: Pitch.
-// Usage: npx tsx scripts/fake-webhook.ts <checkId|client name> <ok|needs_human|no_answer> [client|emergency_contact]
-// A client name (or part of one) picks that client's check in the latest event.
-// Needs MOCK_RETELL=true on the app so the forced outcome is used.
+// Explicit simulated Retell payloads using the real post-call analysis contract.
 import "./env";
-import { randomUUID } from "node:crypto";
 import { supabaseAdmin } from "../lib/supabase";
-import type { CallTarget, ClassifierStatus, RetellWebhookPayload } from "../lib/types";
+import type { CallTarget, Check, CheckWithClient, RetellWebhookPayload } from "../lib/types";
 
-const OUTCOMES: ClassifierStatus[] = ["ok", "needs_human", "no_answer"];
-const TARGETS: CallTarget[] = ["client", "emergency_contact"];
-
-// Realistic payloads so the real classifier can be tested with the same script later.
-const SAMPLES: Record<ClassifierStatus, { transcript: string; disconnection_reason: string; summary: string; in_voicemail: boolean }> = {
-  ok: {
-    transcript: "Agent: Do you have air conditioning?\nUser: Yes, the AC is on and I have water. I feel fine.",
-    disconnection_reason: "agent_hangup",
-    summary: "Client has AC and water, feels fine.",
-    in_voicemail: false,
-  },
-  needs_human: {
-    transcript: "Agent: Are you feeling dizzy, sick, or confused?\nUser: I feel a bit dizzy and my fan stopped.",
-    disconnection_reason: "agent_hangup",
-    summary: "Client reports feeling dizzy, fan stopped.",
-    in_voicemail: false,
-  },
-  no_answer: {
-    transcript: "",
-    disconnection_reason: "voicemail_reached",
-    summary: "Reached voicemail.",
-    in_voicemail: true,
-  },
-};
-
+const OUTCOMES = ["ok", "needs_human", "no_answer", "follow_up", "unclear", "needs_ride"] as const;
+type Outcome = typeof OUTCOMES[number];
 const UUID = /^[0-9a-f-]{36}$/i;
 
-async function resolveCheckId(arg: string): Promise<string> {
-  if (UUID.test(arg)) return arg;
-  const db = supabaseAdmin();
-  const { data: event } = await db.from("events").select("id").order("started_at", { ascending: false }).limit(1).maybeSingle();
-  if (!event) throw new Error("No event yet. Press start on the dashboard first.");
-  const { data, error } = await db
-    .from("checks")
-    .select("id, client:clients!inner(name)")
-    .eq("event_id", event.id)
-    .ilike("client.name", `%${arg}%`);
-  if (error) throw new Error(error.message);
-  if (data.length !== 1) throw new Error(`"${arg}" matched ${data.length} clients. Be more specific.`);
-  return data[0].id;
+export function buildFakeWebhook(check: Pick<Check, "id" | "last_call_id"> & { client: { name: string; emergency_contact_name: string } }, outcome: Outcome, target: CallTarget, mode: "daily" | "crisis"): RetellWebhookPayload {
+  if (!check.last_call_id) throw new Error("This check has no active call ID. Start the event or advance its ladder first.");
+  const contact = check.client.emergency_contact_name;
+  const person = check.client.name;
+  const userText = outcome === "no_answer" ? "" : outcome === "ok"
+    ? target === "emergency_contact" ? `Yes, I spoke to ${person} today. They are okay and with me.` : "I feel fine, I took my morning medications, and I do not need anything. I have a way to leave."
+    : outcome === "needs_human" ? "I feel dizzy and need a person to call me."
+    : outcome === "follow_up" ? "I need help with groceries this week and a pharmacy ride Thursday."
+    : outcome === "needs_ride" ? "I do not have a way to leave quickly on my own."
+    : "I am not sure what you mean. The connection is breaking up.";
+  const agentText = target === "emergency_contact"
+    ? `Hello ${contact}, this is Heartbeat, the automated check-in line. Have you spoken to ${person}, and are they okay?`
+    : "This is Heartbeat, the automated check-in line. How are you feeling, and do you need anything?";
+  const clientStatus = outcome === "ok" && target === "client" ? "ok" : ["needs_human", "follow_up", "needs_ride"].includes(outcome) ? "needs_help" : "unclear";
+  const summary = outcome === "no_answer" ? "SIMULATED: reached voicemail."
+    : target === "emergency_contact" && outcome === "ok" ? `SIMULATED: ${contact} said, "${userText}"`
+    : `SIMULATED: ${userText}`;
+  return {
+    event: "call_analyzed",
+    call: {
+      call_id: check.last_call_id,
+      call_status: "ended",
+      disconnection_reason: outcome === "no_answer" ? "voicemail_reached" : "agent_hangup",
+      transcript: userText ? `Agent: ${agentText}\nUser: ${userText}` : "",
+      transcript_object: userText ? [{ role: "agent", content: agentText }, { role: "user", content: userText }] : [],
+      metadata: { check_id: check.id, target, mode },
+      call_analysis: {
+        call_summary: summary, in_voicemail: outcome === "no_answer",
+        custom_analysis_data: {
+          client_status: clientStatus,
+          request: ["needs_human", "follow_up", "needs_ride"].includes(outcome) ? userText : "",
+          needs_ride: outcome === "needs_ride", contact_confirms_ok: target === "emergency_contact" && outcome === "ok",
+        },
+      },
+    },
+  };
 }
 
 async function main() {
-  const [checkArg, outcome, target = "client"] = process.argv.slice(2) as [string, ClassifierStatus, CallTarget];
-  if (!checkArg || !OUTCOMES.includes(outcome) || !TARGETS.includes(target)) {
-    console.error("Usage: npx tsx scripts/fake-webhook.ts <checkId|client name> <ok|needs_human|no_answer> [client|emergency_contact]");
-    process.exit(1);
+  const [checkArg, value, requestedTarget] = process.argv.slice(2);
+  if (!checkArg || !OUTCOMES.includes(value as Outcome) || (requestedTarget && !["client", "emergency_contact"].includes(requestedTarget))) {
+    throw new Error("Usage: npx tsx scripts/fake-webhook.ts <checkId|fictional name> <ok|needs_human|no_answer|follow_up|unclear|needs_ride> [client|emergency_contact]");
   }
-
-  const checkId = await resolveCheckId(checkArg);
-  const sample = SAMPLES[outcome];
-  const payload: RetellWebhookPayload = {
-    event: "call_analyzed",
-    call: {
-      // New id every run so repeated runs are not deduped.
-      call_id: `fake_${randomUUID()}`,
-      call_status: "ended",
-      disconnection_reason: sample.disconnection_reason,
-      transcript: sample.transcript,
-      metadata: { check_id: checkId, target, mock_outcome: outcome },
-      call_analysis: { call_summary: sample.summary, in_voicemail: sample.in_voicemail },
-    },
-  };
-
+  if (process.env.MOCK_RETELL !== "true") throw new Error("Fake webhooks require MOCK_RETELL=true. No live result will be forged.");
+  const db = supabaseAdmin();
+  const { data: latest, error: eventError } = await db.from("events").select("id,type").order("started_at", { ascending: false }).limit(1).maybeSingle();
+  if (eventError || !latest) throw new Error("No event yet. Start morning or crisis checks first.");
+  let query = db.from("checks").select("*,client:clients!inner(*)");
+  query = UUID.test(checkArg) ? query.eq("id", checkArg) : query.eq("event_id", latest.id).ilike("client.name", `%${checkArg}%`);
+  const { data, error } = await query;
+  if (error || data?.length !== 1) throw new Error(`Expected one matching check; found ${data?.length ?? 0}. Use its UUID or a more specific fictional name.`);
+  const check = data[0] as unknown as CheckWithClient;
+  const { data: event } = await db.from("events").select("type").eq("id", check.event_id).maybeSingle();
+  const mode = event?.type === "daily" ? "daily" : "crisis";
+  const target: CallTarget = requestedTarget as CallTarget || (check.ladder_step >= 3 ? "emergency_contact" : "client");
+  const payload = buildFakeWebhook(check, value as Outcome, target, mode);
   const base = process.env.APP_URL ?? "http://localhost:3000";
-  const res = await fetch(`${base}/api/retell/webhook`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+  const response = await fetch(`${base.replace(/\/$/, "")}/api/retell/webhook`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   });
-  console.log(res.status, await res.text());
+  if (!response.ok) throw new Error(`Mock webhook failed (${response.status}). Check the app logs.`);
+  console.log(`SIMULATED ${value}: HTTP ${response.status}; used the check's current call ID (${target}, ${mode}).`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
+if (/fake-webhook\.(?:ts|js)$/.test(process.argv[1] ?? "")) void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : "Mock webhook failed.");
+  process.exitCode = 1;
 });

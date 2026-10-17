@@ -1,12 +1,10 @@
-// Optional classifier. Sends the transcript to an LLM. Owner: Fullstack.
-import type { Classifier, ClassifierResult, RetellCall } from "@/lib/types";
+import type { Classifier } from "@/lib/types";
+import { classifyRetellAnalysis } from "./retell";
 
+// The optional LLM selector uses Retell's existing model-generated, structured
+// post-call analysis. It never guesses wellbeing from free text or requires an
+// additional model provider on the check-in path.
 export const llmClassifier: Classifier = {
   name: "llm",
-  async classify(call: RetellCall): Promise<ClassifierResult> {
-    // TODO(Fullstack): call the LLM with LLM_API_KEY and a strict JSON schema
-    // { status: ok | needs_human | no_answer, summary, flag_reason }. Still treat voicemail as no_answer.
-    void call;
-    return { status: "ok", summary: "Fake result from llm classifier stub", flag_reason: null };
-  },
+  async classify(call, context) { return classifyRetellAnalysis(call, context); },
 };

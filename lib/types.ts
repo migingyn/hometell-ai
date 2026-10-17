@@ -2,6 +2,8 @@
 // Mirrors supabase/schema.sql.
 
 export type RiskTier = "red" | "yellow" | "green";
+export type EventMode = "daily" | "crisis";
+export type Urgency = "urgent" | "follow_up";
 
 export type CheckStatus =
   | "queued"
@@ -26,12 +28,18 @@ export type Client = {
   emergency_contact_name: string;
   emergency_contact_phone: string;
   usual_pickup_time: string | null;
+  language?: string;
+  needs_ride?: boolean;
+  last_daily_at?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 };
 
 export type HeartbeatEvent = {
   id: string;
   type: string;
   started_at: string;
+  alert_text: string | null;
 };
 
 export type Check = {
@@ -46,6 +54,8 @@ export type Check = {
   flag_reason: string | null;
   handled_at: string | null;
   updated_at: string;
+  urgency: Urgency | null;
+  sms_status: string | null;
 };
 
 export type CheckWithClient = Check & { client: Client };
@@ -61,6 +71,8 @@ export type CheckPatch = Partial<
     | "summary"
     | "flag_reason"
     | "handled_at"
+    | "urgency"
+    | "sms_status"
   >
 >;
 
@@ -79,6 +91,7 @@ export type CallLog = {
 export type CallMetadata = {
   check_id: string;
   target: CallTarget;
+  mode?: EventMode;
   // Only read when MOCK_RETELL=true. Lets scripts/fake-webhook.ts force an outcome.
   mock_outcome?: ClassifierStatus;
 };
@@ -90,6 +103,7 @@ export type RetellCall = {
   call_status?: string;
   disconnection_reason?: string;
   transcript?: string;
+  transcript_object?: { role: string; content: string }[];
   metadata?: CallMetadata;
   call_analysis?: {
     call_summary?: string;
@@ -113,11 +127,14 @@ export type ClassifierResult = {
   status: ClassifierStatus;
   summary: string;
   flag_reason: string | null;
+  urgency?: Urgency | null;
 };
+
+export type ClassifierContext = { mode: EventMode; target?: CallTarget; contactName?: string };
 
 export interface Classifier {
   name: string;
-  classify(call: RetellCall): Promise<ClassifierResult>;
+  classify(call: RetellCall, context?: ClassifierContext): Promise<ClassifierResult>;
 }
 
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };

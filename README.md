@@ -1,96 +1,65 @@
 # Heartbeat
 
-AI phone desk for home care agencies. A coordinator clicks one button. Heartbeat calls every senior client through Retell AI, highest risk first, and shows who is okay, who is silent, and who needs a human.
+Daily check-ins and crisis outreach for an agency's enrolled clients. A coordinator starts a round, records what clients or their listed emergency contacts actually report, and follows unanswered calls through retry → text → emergency contact → human handoff.
 
-See `PRD.md` for scope. This repo is a skeleton: routes, database, and dashboard are wired, and feature logic is stubbed with `TODO(<owner>)` comments.
+**Run morning check-ins** collects ordinary requests as amber follow-ups. Danger phrases in the person's own words trigger an urgent human handoff in either mode. **Start crisis check** takes a coordinator-supplied alert for the agent to read verbatim; crisis help requests are urgent. Heartbeat does not make medical or evacuation decisions or dispatch emergency services.
 
-## Setup
+The working local rehearsal uses actual Supabase persistence and HTTP routes with explicitly simulated call results. No real Retell calls or Twilio delivery have been verified. See [the product scope](PRD.md), [rehearsal runbook](docs/HEARTBEAT_RUNBOOK.md), and [exact English/Korean agent prompts](docs/RETELL_AGENTS.md).
 
-1. Install
+## Quick start
 
-   ```bash
-   npm install
-   ```
+With Node.js, Docker Desktop running, and dependencies installed:
 
-2. Create a Supabase project. In the SQL editor, run all of `supabase/schema.sql`. It creates the tables, read policies for the dashboard, and turns on Realtime for `checks`. Re-running it wipes all data.
+```bash
+npm install
+npx supabase start --exclude studio,imgproxy,mailpit,gotrue,storage-api,postgres-meta,edge-runtime,logflare,vector,supavisor
+npm run setup:heartbeat-local
+npm run seed
+npm run dev:heartbeat
+```
 
-3. Env
+Open [the dashboard](http://localhost:3017). Local Supabase uses API port **55321** and database port **55322**. The setup script writes private `.env.local` with `MOCK_RETELL=true`, `DEMO_TIME_SCALE=0.05`, fictional-data labels, and `APP_URL=http://localhost:3017`; it refuses to replace a different configured database.
 
-   ```bash
-   cp .env.example .env.local
-   ```
+Migrations live in `supabase/migrations/`. Apply them in order for an existing database; they preserve enrolled data. Seeding refuses a nonempty roster unless an intentional reset uses `npm run seed -- --replace`. Keep credentials and consenting participant numbers out of Git.
 
-   Fill in the three Supabase values (Project Settings > API). Leave `MOCK_RETELL=true` until Retell is set up.
+## Rehearse both modes
 
-4. Seed 10 clients
+Start a morning round, then inject simulated post-call results:
 
-   ```bash
-   npx tsx scripts/seed.ts
-   ```
+```bash
+npx tsx scripts/fake-webhook.ts "Margaret Ellis" ok
+npx tsx scripts/fake-webhook.ts "Harold Kim" follow_up
+npx tsx scripts/fake-webhook.ts "Rosa Alvarez" needs_human
+npx tsx scripts/fake-webhook.ts "Walter Brooks" no_answer
+```
 
-5. Run
+The payload uses the check's current call ID. Repeating it tests deduplication; advance to a new attempt before submitting its next result. At demo scale, each waiting interval is about 15 seconds. After the emergency-contact call, use `ok emergency_contact` to confirm okay through the named contact or `no_answer emergency_contact` to continue to human handoff. The [runbook](docs/HEARTBEAT_RUNBOOK.md) covers every step and the crisis alert dialog.
 
-   ```bash
-   npm run dev
-   ```
+`MOCK MODE · NO REAL CALLS` and fictional-client labels remain visible. Mock SMS is logged as simulated. In live mode, missing Twilio configuration produces **text not sent (SMS not configured)**; provider acceptance does not establish delivery.
 
-   Open http://localhost:3000.
+## Planning and language support
 
-## Demo in mock mode
+Explicit daily answers update `needs_ride` and `last_daily_at`. Crisis ordering prioritizes risk tier, then ride need and living alone. Cards show ride and requested-language badges. Dedicated Korean agent setup and literal Korean danger-phrase rules are implemented; a language preference or successful setup dry-run does not verify a real Korean phone call.
 
-With `MOCK_RETELL=true` no calls or texts go out. Calls get a `mock_` id and are logged to the server console.
+The separate read-only [LA map](http://localhost:5175/heartbeat) reads the same Supabase records and updates without refresh; satellite rendering and the geographic fallback were verified locally. The map source remains local under `crisis-la/`, excluded from this branch’s commits as requested. Its points are approximate fictional locations. Existing SourceCheck replays remain separate.
 
-1. Press **Start heat wave check**. Ten cards appear as `calling`, red tier first.
-2. In another terminal, fake a call result. Use a check id or part of a client name:
+## Real-phone setup
 
-   ```bash
-   npx tsx scripts/fake-webhook.ts Margaret needs_human
-   npx tsx scripts/fake-webhook.ts Harold no_answer
-   npx tsx scripts/fake-webhook.ts Rosa ok
-   npx tsx scripts/fake-webhook.ts Harold ok emergency_contact
-   ```
+Follow [RETELL_AGENTS.md](docs/RETELL_AGENTS.md) to configure and review dedicated daily/crisis drafts, publish them in Retell, and provide a public HTTPS callback endpoint. Check-in agents have no internet research or custom tools. Use gitignored `scripts/seed.local.json` for consenting teammates; display identities remain fictional. Set `MOCK_RETELL=false` only for an authorized real-phone rehearsal. Live calling rejects the fictional 555 roster.
 
-3. Cards change color live. Press **Advance** on a yellow card to bump its ladder step, or wait for `/api/ladder/tick` (every 5 seconds from the dashboard, step delay is 5 min times `DEMO_TIME_SCALE`).
-4. Press **Mark handled** to move a card to Handled.
+The dashboard reads `clients_public`, which omits telephone numbers; the server uses the private roster. Optional research and delegated-contact tools are documented separately in [live voice setup](docs/LIVE_VOICE.md) and are excluded from the check-in path.
 
-The stubs fake their results, so in mock mode the ladder only bumps the step number and nothing is texted. The real behavior is listed in each `TODO`.
+## Verify
 
-## Real calls
+```bash
+npm run typecheck
+npm run lint
+npm run build
+npm run test:voice
+npm run test:heartbeat
+npm run verify:heartbeat
+```
 
-1. Set `MOCK_RETELL=false` and fill in the Retell and Twilio values.
-2. `ngrok http 3000`, then set the Retell agent webhook URL to `https://<ngrok-host>/api/retell/webhook`.
-3. Put teammates' real numbers in `scripts/seed.ts` and re-seed.
+The integration verifier requires explicit mock mode, a seeded local database, the running dashboard server, and demo scale `0.05`. It verifies both modes against actual Supabase and HTTP routes and saves phone-free evidence to `output/heartbeat/verification.json`. See the [runbook verification record](docs/HEARTBEAT_RUNBOOK.md#verification) for completed checks and remaining live-provider limits.
 
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | App on localhost:3000 |
-| `npm run lint` | ESLint |
-| `npx tsc --noEmit` | Type check. Run `npm run dev` or `npx next typegen` once first so route types exist |
-| `npx tsx scripts/seed.ts` | Wipe and seed 10 clients |
-| `npx tsx scripts/fake-webhook.ts <checkId\|name> <ok\|needs_human\|no_answer> [client\|emergency_contact]` | Fake a Retell result |
-
-## How a call flows
-
-1. `POST /api/events/start` creates an event and one `queued` check per client, then `lib/retell.ts` places calls red, yellow, green. Checks go to `calling`.
-2. Retell (or `fake-webhook.ts`) posts `call_analyzed` to `POST /api/retell/webhook`. The route skips repeated call ids, runs `lib/classifier` (hard rules first), writes `call_logs`, and saves the patch from `applyCallResult` in `lib/ladder.ts`. A new `needs_human` texts the coordinator.
-3. The dashboard calls `POST /api/ladder/tick` every 5 seconds. It runs `runLadderStep` for each `no_answer` check whose `next_action_at` has passed. Each step is claimed first so two ticks never run it twice.
-4. `POST /api/ladder/advance/:checkId` runs the next step now. `POST /api/checks/:id/handled` marks it handled.
-5. The dashboard reads with the anon key and gets updates through Supabase Realtime on `checks`.
-
-Every route returns `{ ok: true, data }` or `{ ok: false, error }`.
-
-## Ownership
-
-| Path | Owner | Notes |
-| --- | --- | --- |
-| `lib/types.ts` | Shared | The contract. Do not change without telling the team |
-| `supabase/schema.sql` | Shared | Do not change without telling the team |
-| `lib/supabase.ts`, `lib/supabase-browser.ts`, `lib/config.ts`, `lib/api.ts` | Shared | Clients, env, response helpers |
-| `lib/retell.ts`, `app/api/retell/*`, `app/api/events/*` | Mikey | Retell calls and webhook |
-| `lib/ladder.ts`, `lib/checks.ts`, `lib/classifier/*`, `lib/sms.ts`, `app/api/ladder/*`, `app/api/checks/*` | Fullstack | Ladder and classification |
-| `app/page.tsx`, `components/*` | Frontend | Dashboard. `components/ui/*` is shadcn |
-| `scripts/*`, `docs/*` | Pitch | Seed data and demo script |
-
-Find your work with `grep -rn "TODO(Mikey)\|TODO(Fullstack)\|TODO(Frontend)\|TODO(Pitch)" app lib components scripts`.
+The open dashboard drives follow-up ticks. This hackathon build has no hosted scheduler, login, or automatic emergency dispatch.

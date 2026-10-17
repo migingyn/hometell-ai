@@ -1,12 +1,7 @@
--- Heartbeat schema. Shared file: tell the team before changing it.
--- Run once in the Supabase SQL editor. Safe to re-run: it drops and recreates.
+-- Heartbeat base schema. Non-destructive: existing rows are preserved.
+-- Apply migrations/202610170002_dual_use.sql after this file on an existing project.
 
-drop table if exists call_logs;
-drop table if exists checks;
-drop table if exists events;
-drop table if exists clients;
-
-create table clients (
+create table if not exists clients (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   phone text not null,
@@ -18,13 +13,13 @@ create table clients (
   usual_pickup_time time
 );
 
-create table events (
+create table if not exists events (
   id uuid primary key default gen_random_uuid(),
   type text not null,
   started_at timestamptz not null default now()
 );
 
-create table checks (
+create table if not exists checks (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references events (id) on delete cascade,
   client_id uuid not null references clients (id) on delete cascade,
@@ -40,10 +35,10 @@ create table checks (
   unique (event_id, client_id)
 );
 
-create index checks_next_action_idx on checks (next_action_at) where status = 'no_answer';
-create index checks_last_call_idx on checks (last_call_id);
+create index if not exists checks_next_action_idx on checks (next_action_at) where status = 'no_answer';
+create index if not exists checks_last_call_idx on checks (last_call_id);
 
-create table call_logs (
+create table if not exists call_logs (
   id uuid primary key default gen_random_uuid(),
   check_id uuid not null references checks (id) on delete cascade,
   -- Unique so a repeated Retell webhook is ignored (idempotency).
@@ -63,6 +58,7 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists checks_touch on checks;
 create trigger checks_touch before update on checks
   for each row execute function touch_updated_at();
 
@@ -72,9 +68,16 @@ alter table events enable row level security;
 alter table checks enable row level security;
 alter table call_logs enable row level security;
 
+drop policy if exists "anon read clients" on clients;
 create policy "anon read clients" on clients for select using (true);
+drop policy if exists "anon read events" on events;
 create policy "anon read events" on events for select using (true);
+drop policy if exists "anon read checks" on checks;
 create policy "anon read checks" on checks for select using (true);
 
 -- Realtime on checks.
-alter publication supabase_realtime add table checks;
+do $$ begin
+  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='checks') then
+    alter publication supabase_realtime add table checks;
+  end if;
+end $$;
