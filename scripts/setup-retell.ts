@@ -94,7 +94,13 @@ async function main() {
 
   if (publish) {
     const latest = await r.agent.retrieve(agent.agent_id);
-    await r.agent.publish(agent.agent_id, { version: latest.version, version_description: "Heartbeat backend URLs and call context" });
+    // retell-sdk 6.2.8 throws "Unexpected end of JSON input" on publish's empty reply,
+    // even when it worked. Re-read the agent to see what really happened.
+    await r.agent
+      .publish(agent.agent_id, { version: latest.version, version_description: "Heartbeat backend URLs and call context" })
+      .catch((e) => console.log(`publish reply: ${e instanceof Error ? e.message : e}`));
+    const after = await r.agent.retrieve(agent.agent_id, { version: latest.version });
+    if (!after.is_published) throw new Error(`Version ${latest.version} is not published. Publish it in the Retell dashboard`);
     console.log(`Published version ${latest.version}. Calls now use it.`);
   } else {
     console.log("Not published. Add --publish, or publish in the Retell dashboard.");
