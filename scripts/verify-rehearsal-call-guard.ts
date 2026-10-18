@@ -14,6 +14,9 @@ const fixtures: Fixture[] = [];
 const fixtureAgent = "global_guard_verification_fixture";
 const originalFetch = globalThis.fetch;
 let providerRequests = 0;
+let providerReads = 0;
+let providerReadMode: "ongoing" | "ended" | "unavailable" | "mismatch" = "ongoing";
+const providerCalls = new Map<string, { call_id: string; agent_id: string; metadata: Record<string, string> }>();
 
 function request(path: string, body: unknown, permit?: string) {
   return new Request(`http://127.0.0.1:3018${path}`, { method: "POST", headers: {
@@ -72,14 +75,31 @@ async function main() {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin === database.origin) return originalFetch(input, init);
     // Fail closed: no external network request can leave this process.
+    if (url.origin === "https://api.retellai.com" && url.pathname.startsWith("/v2/get-call/")) {
+      assert.equal(init?.method, "GET");
+      const stored = providerCalls.get(decodeURIComponent(url.pathname.slice("/v2/get-call/".length)));
+      assert.ok(stored, "Only this script's fixture calls may be inspected");
+      providerReads++;
+      if (providerReadMode === "unavailable") return Response.json({ error: "Fixture unavailable" }, { status: 503 });
+      return Response.json({ ...stored,
+        agent_id: providerReadMode === "mismatch" ? "unrelated-agent" : stored.agent_id,
+        call_status: providerReadMode === "ongoing" ? "ongoing" : "ended",
+        disconnection_reason: providerReadMode === "ongoing" ? undefined : "agent_hangup",
+        transcript_object: [{ role: "user", content: "I need a ride." }],
+        // Analysis alone must never unlock a call which the provider says is ongoing.
+        ...(providerReadMode === "ongoing" ? { call_analysis: { call_summary: "Fixture partial summary" } } : {}),
+      });
+    }
     assert.equal(url.href, "https://api.retellai.com/v2/create-phone-call");
     providerRequests++;
     const payload = JSON.parse(String(init?.body));
     assert.equal(payload.to_number, "+12025550199");
     assert.equal(payload.override_agent_id, fixtureAgent);
     assert.ok(fixtures.some(fixture => fixture.checkId === payload.metadata.check_id));
+    const callId = `call_global_guard_fixture_${payload.metadata.rehearsal_request_id}`;
+    providerCalls.set(callId, { call_id: callId, agent_id: fixtureAgent, metadata: payload.metadata });
     await new Promise(resolve => setTimeout(resolve, 100));
-    return Response.json({ call_id: `call_global_guard_fixture_${payload.metadata.rehearsal_request_id}`, call_status: "registered" });
+    return Response.json({ call_id: callId, call_status: "registered" });
   };
 
   try {
@@ -105,13 +125,31 @@ async function main() {
       if (["unknown", "error"].includes(status)) assert.match((await retry.json()).error, /unconfirmed outcome/);
     }
     assert.equal(providerRequests, 1);
+    assert.ok(providerReads >= 5, "Stale bound attempts are checked against the provider");
 
-    // Explicitly resolve only our fictional attempt. There is no automatic expiry.
-    await patchFixture(winner, { status: "ended", call_finished_at: null });
+    for (const mode of ["unavailable", "mismatch"] as const) {
+      providerReadMode = mode;
+      await patchFixture(winner, { status: "requested", updated_at: old });
+      assert.equal((await call(loser)).status, 409, `${mode} evidence must never release a reservation`);
+      assert.equal(providerRequests, 1);
+    }
+
+    const winnerCallId = `call_global_guard_fixture_${winner.requestId}`;
+    await patchFixture(winner, { status: "unknown", call_id: null, updated_at: old });
+    const readsBeforeUnbound = providerReads;
+    assert.equal((await call(loser)).status, 409, "An unbound request cannot be recovered automatically");
+    assert.equal(providerReads, readsBeforeUnbound);
+
+    // Recover a missed callback in a different case using bound provider evidence.
+    providerReadMode = "ended";
+    await patchFixture(winner, { status: "requested", call_id: winnerCallId, updated_at: old });
     const cooldown = await call(loser);
     assert.equal(cooldown.status, 409);
     assert.match((await cooldown.json()).error, /Wait 60 seconds/);
-    const { data: firstEnd } = await db.from("heartbeat_rehearsals").select("call_finished_at").eq("request_id", winner.requestId).single();
+    const { data: firstEnd } = await db.from("heartbeat_rehearsals").select("status,transcript,call_finished_at").eq("request_id", winner.requestId).single();
+    assert.equal(firstEnd?.status, "ended", "Provider-confirmed completion releases the stale active status");
+    assert.match(firstEnd?.transcript ?? "", /I need a ride/);
+    assert.ok(firstEnd?.call_finished_at, "Recovery still starts the terminal cooldown");
     await patchFixture(winner, { status: "analyzed", updated_at: new Date().toISOString() });
     const { data: analyzed } = await db.from("heartbeat_rehearsals").select("call_finished_at").eq("request_id", winner.requestId).single();
     assert.equal(analyzed?.call_finished_at, firstEnd?.call_finished_at, "Analysis must not restart cooldown");
@@ -123,7 +161,8 @@ async function main() {
     assert.equal(afterCooldown.status, 200, await afterCooldown.clone().text());
     assert.equal(providerRequests, 2, "A new call is allowed after a confirmed terminal attempt's cooldown");
     console.log(JSON.stringify({ passed: true, actualCallsPlaced: 0, crossSessionRace: { starts: 2, interceptedProviderRequests: 1, statuses: [200, 409] },
-      sameRequestIdempotent: true, ageDoesNotReleaseActiveOrUnknown: true, terminalCooldownSeconds: 60, lateEvidenceDoesNotExtendCooldown: true }));
+      sameRequestIdempotent: true, ageDoesNotReleaseActiveOrUnknown: true, staleCallRecoveredFromProvider: true,
+      unavailableMismatchedAndUnboundStayBlocked: true, terminalCooldownSeconds: 60, lateEvidenceDoesNotExtendCooldown: true }));
   } finally {
     for (const fixture of fixtures) {
       const { data: patients } = await db.from("clients").select("id").eq("emergency_contact_name", `Fictional replay contact [${fixture.sessionId}]`);

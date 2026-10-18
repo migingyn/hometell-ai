@@ -35,8 +35,12 @@ The app uses port 3021 and its isolated map uses 5180. The map trusts the config
 
 The existing webhook receiver can keep writing to the shared database. The experiment reads those persisted events. Do not repoint the public callback or reconfigure the provider agent just to switch UI branches.
 
+If an earlier case still looks active after its call ended, starting the next prepared call checks the earlier call with Retell and saves its confirmed completion. The 60-second cooldown still applies after that sync; retry after it expires. Active calls, provider failures, mismatched call records and requests without a confirmed call ID remain blocked. Recovery never redials the earlier call.
+
 ## Verification
 
 Heartbeat tests (132), voice tests (97), map tests (40), typecheck, lint, and app/map production builds passed. The scenario integration check verifies 20 explicit outcomes, original severity ordering, idempotent preparation, preserved prior care, and untouched pre-existing records. Browser checks cover Call → Review → quote highlight → Follow up, real-call setup, and mobile overflow.
 
 No actual phone calls were placed during this UI pass. A fresh answered Retell phone rehearsal and any eventual warm-transfer demonstration remain separate verification steps.
+
+Call-recovery regression: `npx tsx scripts/verify-rehearsal-call-guard.ts` uses disposable local fixtures and intercepts every provider request. It verifies recovery of a missed callback in another case, concurrent-call blocking, idempotency, unresolved-call blocking and the unchanged cooldown. It places no phone calls.

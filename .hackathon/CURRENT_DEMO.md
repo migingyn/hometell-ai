@@ -11,3 +11,5 @@ Provider state is unchanged. The dedicated rehearsal agent was last verified at 
 Verified: 132 Heartbeat tests, 97 voice tests, 40 map tests, typecheck, lint, app/map production builds, 20-person scenario integration including idempotency and untouched pre-existing records, quote-to-transcript navigation, follow-up, local call setup, reload restoration and mobile width checks. Only the integration test's own disposable fixtures were removed.
 
 Private environment files, local media, output captures and older planning notes are not part of the branch's source changes. The parent checkout is not edited or switched.
+
+Call-status recovery: the next dial attempt reconciles stale blockers against their bound Retell call before retrying the atomic reservation. Confirmed terminal calls release the active lock and retain the 60-second cooldown. Active, unbound or unverifiable attempts remain blocked. The existing finished rehearsal was synced from Retell; no call was placed by the repair. The isolated guard regression covers recovery, concurrency, idempotency, provider failure/binding mismatch and cooldown behavior.

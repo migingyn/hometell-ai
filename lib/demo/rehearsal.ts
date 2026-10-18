@@ -112,10 +112,22 @@ export function rehearsalVoiceAnalysis(row: RehearsalRow): VoiceAnalysis {
 export async function startRehearsal(input: Input, env: Record<string, string | undefined> = process.env) {
   if (!rehearsalReadiness(env).configured) throw new RehearsalError("The teammate call is not configured yet. No call was placed.", 503);
   const db = supabaseAdmin();
-  const { data: claim, error } = await db.rpc("reserve_heartbeat_rehearsal", {
+  const reserve = () => db.rpc("reserve_heartbeat_rehearsal", {
     p_request_id: input.requestId, p_session_id: input.sessionId, p_event_id: input.eventId,
     p_check_id: input.checkId, p_agent_id: env.RETELL_REHEARSAL_AGENT_ID!.trim(),
   });
+  let { data: claim, error } = await reserve();
+  if (error && /REHEARSAL_CALL_(ACTIVE|UNCERTAIN)/.test(error.message)) {
+    // A missed callback in another case must not hold this case indefinitely.
+    // Only provider-confirmed terminal calls can be reconciled. The same atomic
+    // reservation still enforces concurrency, idempotency and the cooldown.
+    const { data: blockers, error: readError } = await db.from("heartbeat_rehearsals").select("*")
+      .in("status", ["reserved", "requested", "ongoing", "unknown", "error"])
+      .not("call_id", "is", null).order("updated_at", { ascending: true }).limit(8);
+    if (readError) throw new RehearsalError("Earlier call status could not be checked. No new call was placed.", 503);
+    await Promise.allSettled((blockers as RehearsalRow[] ?? []).map(row => refreshRehearsal(row, { terminalOnly: true })));
+    ({ data: claim, error } = await reserve());
+  }
   if (error) {
     if (error.message.includes("REHEARSAL_CALL_UNCERTAIN")) throw new RehearsalError("A previous teammate call has an unconfirmed outcome. Check and resolve that attempt before starting another. No new call was placed.", 409);
     if (error.message.includes("REHEARSAL_CALL_ACTIVE")) throw new RehearsalError("Another teammate call is active or still being confirmed. Review that call before starting a new one. No new call was placed.", 409);
@@ -203,8 +215,8 @@ export async function interceptRehearsalWebhook(raw: string, signature: string |
   return true;
 }
 
-/** Read-only refresh recovers a missed callback and obtains a fresh recording link. */
-export async function refreshRehearsal(row: RehearsalRow): Promise<RehearsalRow> {
+/** Fetch provider evidence and persist a missed callback; never places a call. */
+export async function refreshRehearsal(row: RehearsalRow, options: { terminalOnly?: boolean } = {}): Promise<RehearsalRow> {
   const age = Date.now() - Date.parse(row.updated_at);
   const markUnconfirmed = async () => {
     const { error } = await supabaseAdmin().rpc("bind_heartbeat_rehearsal", { p_request_id: row.request_id, p_call_id: null, p_uncertain: true });
@@ -220,7 +232,9 @@ export async function refreshRehearsal(row: RehearsalRow): Promise<RehearsalRow>
     throw error;
   }
   const hasAnalysis = Boolean(call.call_analysis?.call_summary || call.call_analysis?.custom_analysis_data?.client_status);
-  const event = hasAnalysis ? "call_analyzed" : ["ended", "not_connected", "error"].includes(call.call_status ?? "") ? "call_ended" : "transcript_updated";
+  const terminal = ["ended", "not_connected", "error"].includes(call.call_status ?? "");
+  if (options.terminalOnly && !terminal) return row;
+  const event = terminal ? hasAnalysis ? "call_analyzed" : "call_ended" : "transcript_updated";
   await saveRehearsalCall(row, event, call);
   return await readRehearsal(row.check_id) ?? row;
 }
