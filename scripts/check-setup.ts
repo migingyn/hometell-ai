@@ -38,7 +38,7 @@ async function checkSupabase() {
     return report("FAIL", "Supabase", "NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set. Every /api route needs these.");
   }
   for (const table of ["clients", "daily_entries", "calls", "alerts", "crisis_runs"]) {
-    const { count, error } = await supabaseAdmin().from(table).select("*", { count: "exact", head: true });
+    const { count, error } = await supabaseAdmin().from(table).select("*", { count: "exact" }).limit(1);
     if (error) return report("FAIL", "Supabase", `table ${table}: ${error.message}. Run supabase/schema.sql.`);
     if (table === "clients") report(count ? "PASS" : "WARN", "Supabase", `${count ?? 0} residents${count ? "" : ". Run npx tsx scripts/seed.ts"}`);
   }
@@ -139,7 +139,15 @@ async function checkTwilio() {
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${t.sid}.json`, {
     headers: { Authorization: `Basic ${Buffer.from(`${t.sid}:${t.token}`).toString("base64")}` },
   });
-  report(res.ok ? "PASS" : "FAIL", "Twilio", res.ok ? `account works. Texts go to ${config.frontDeskPhone}` : `account check returned ${res.status}`);
+  if (!res.ok) return report("FAIL", "Twilio", `account check returned ${res.status}`);
+  // Twilio can only send from a number this account owns.
+  const owned = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${t.sid}/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(t.from)}`, {
+    headers: { Authorization: `Basic ${Buffer.from(`${t.sid}:${t.token}`).toString("base64")}` },
+  }).then((r) => r.json() as Promise<{ incoming_phone_numbers?: unknown[] }>);
+  if (!owned.incoming_phone_numbers?.length) {
+    return report("FAIL", "Twilio", `TWILIO_FROM_NUMBER ${t.from} is not a number in this Twilio account, so texts will fail. Use a number from Twilio > Phone Numbers`);
+  }
+  report("PASS", "Twilio", `account works. Texts go from ${t.from} to ${config.frontDeskPhone}`);
 }
 
 function checkEnv() {
