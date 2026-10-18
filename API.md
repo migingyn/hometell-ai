@@ -174,6 +174,20 @@ Body `{ "call_type": "daily" | "crisis", "crisis_type": "heat_wave" }`, both opt
 { "call_id": "call_8f2e1a..." }
 ```
 
+## POST /api/daily/start
+
+Body `{ "force": false }`, optional. Calls every resident who has not had a daily call today, vitals `alert` first, then `watch`, then `normal`, about 2 seconds apart. A call that could not be placed does not count as called. `force: true` calls everyone. Returns before the calls finish.
+
+```json
+{
+  "calling": [
+    { "client_id": 2, "name": "Harold Kim", "room": "104" },
+    { "client_id": 3, "name": "Rosa Alvarez", "room": "112" }
+  ],
+  "skipped": [{ "client_id": 1, "name": "Margaret Ellis", "room": "101" }]
+}
+```
+
 ## GET /api/calls?limit=20
 
 Latest calls, newest first, with `client_name` and `room`. Same fields as `last_calls` above.
