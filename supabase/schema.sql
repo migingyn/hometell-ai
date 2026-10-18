@@ -129,6 +129,10 @@ alter table calls enable row level security;
 alter table alerts enable row level security;
 
 create policy "anon read clients" on clients for select using (true);
+-- The anon key never sees resident phone numbers. Every column but phone is readable.
+revoke select on clients from anon;
+grant select (id, name, preferred_name, room, aide_name, nurse_name, allergies, personal_note, vitals_ranges, created_at)
+  on clients to anon;
 create policy "anon read daily_entries" on daily_entries for select using (true);
 create policy "anon read crisis_runs" on crisis_runs for select using (true);
 create policy "anon read calls" on calls for select using (true);

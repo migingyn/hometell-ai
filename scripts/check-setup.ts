@@ -80,6 +80,10 @@ async function checkRetell() {
   const max = agent.max_call_duration_ms;
   const maxOk = max != null && max >= 3 * 60000 && max <= 6 * 60000;
   report(maxOk ? "PASS" : "FAIL", "Retell agent", `max call duration: ${max ? Math.round(max / 1000) + "s" : "default"}${maxOk ? "" : ". Want about 5 minutes. A daily check cannot finish in less, and every cut-off raises open_line"}`);
+  // A call longer than OPEN_LINE_MINUTES raises an urgent open_line alert. Real check-ins run 3 to 5 minutes.
+  if (!config.mockRetell && config.openLineMinutes < 3) {
+    report("WARN", "Env", `OPEN_LINE_MINUTES=${config.openLineMinutes} with real calls. Every normal call longer than that raises an urgent open_line alert. Use 4`);
+  }
 
   const fields = new Map((agent.post_call_analysis_data ?? []).map((f) => [f.name, f as { type: string; choices?: string[] }]));
   const bad: string[] = [];

@@ -88,9 +88,5 @@ export async function activeCrisisRun(): Promise<CrisisRun | null> {
   );
 }
 
-// Midnight today in server local time, as ISO.
-export function startOfToday(): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString();
-}
+// Lives in config.ts next to today(). Re-exported so existing imports keep working.
+export { startOfToday } from "@/lib/config";
