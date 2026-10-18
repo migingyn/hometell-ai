@@ -52,6 +52,7 @@ Run `npx tsx scripts/check-setup.ts` at any time. It only reads, and lists each 
 | `PUBLIC_API=true` | Opens `/api/*` on the public ngrok URL. Off by default, so only localhost can call `/api` and strangers cannot place calls. Retell's routes stay public either way |
 | `SEED_PHONES` | Seeded residents get real numbers. Calls to the fake 555 numbers are refused before dialing |
 | `NURSE_PHONE` | The agent's `transfer_to_nurse` tool has a number to dial (falls back to `FRONT_DESK_PHONE`) |
+| `AGENCY_TZ` | The care home's time zone, like `America/Los_Angeles`. Decides when "today" starts for nurse entries, cards, and the trend. Empty uses the server's (UTC on most hosts) |
 | All four Twilio vars | Every alert is also texted to `FRONT_DESK_PHONE` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Only for a frontend that reads Supabase Realtime directly |
 

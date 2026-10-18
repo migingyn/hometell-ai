@@ -26,7 +26,33 @@ export const config = {
 // A crisis call that never reaches call_started this long after we register it counts as no response.
 export const NEVER_STARTED_MS = 90 * 1000;
 
-// Today's date in the server's local time zone, as YYYY-MM-DD.
+// The care home's time zone, like America/Los_Angeles. Empty uses the server's,
+// which is UTC on most hosts and would roll "today" over in the late afternoon.
+const AGENCY_TZ = process.env.AGENCY_TZ || undefined;
+
+// Today's date in the agency time zone, as YYYY-MM-DD.
 export function today(d = new Date()): string {
-  return d.toLocaleDateString("en-CA");
+  return d.toLocaleDateString("en-CA", { timeZone: AGENCY_TZ });
+}
+
+// Midnight today in the agency time zone, as an ISO timestamp.
+export function startOfToday(now = new Date()): string {
+  const midnightUtc = Date.parse(`${today(now)}T00:00:00Z`);
+  return new Date(midnightUtc - tzOffsetMs(midnightUtc)).toISOString();
+}
+
+// How far the agency clock is ahead of UTC at this instant, in ms. Negative in the US.
+function tzOffsetMs(at: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: AGENCY_TZ,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(at);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - at;
 }
