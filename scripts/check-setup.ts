@@ -61,6 +61,9 @@ async function checkRetell() {
     return report("FAIL", "Retell", `agent ${config.retellAgentId}: ${e instanceof Error ? e.message : e}. Check the key and RETELL_AGENT_ID.`);
   }
   report("PASS", "Retell", `key works. Agent "${agent.agent_name}" version ${agent.version}`);
+  if (!process.env.RETELL_WEBHOOK_KEY) {
+    report("WARN", "Retell", "RETELL_WEBHOOK_KEY not set, so webhooks are checked with RETELL_API_KEY. If they get 401, set it to the key with the webhook badge");
+  }
   report(agent.is_published ? "PASS" : "WARN", "Retell agent", agent.is_published ? "published" : "not published. Run scripts/setup-retell.ts --apply --publish when ready");
 
   const base = config.publicBaseUrl;

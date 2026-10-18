@@ -4,6 +4,9 @@ export const config = {
   mockRetell: process.env.MOCK_RETELL === "true",
   skipSignatureCheck: process.env.SKIP_SIGNATURE_CHECK === "true",
   retellApiKey: process.env.RETELL_API_KEY ?? "",
+  // Retell signs webhooks with the API key that has the webhook badge in the dashboard,
+  // which may not be the key used for calls.
+  retellWebhookKey: process.env.RETELL_WEBHOOK_KEY || process.env.RETELL_API_KEY || "",
   retellAgentId: process.env.RETELL_AGENT_ID || "agent_88c42c8831666ec6ef1a5b127b",
   retellFromNumber: process.env.RETELL_FROM_NUMBER || "+16264635691",
   agencyName: process.env.AGENCY_NAME || "Sunrise Home Care",
