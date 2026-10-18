@@ -46,10 +46,10 @@ async function main() {
     assert.equal(first.simulated, true);
     assert.deepEqual(await replay({ action: "start", sessionId }), first);
     let rows = await checks(eventId);
-    assert.equal(rows.length, 8);
+    assert.equal(rows.length, 20);
     patientIds = rows.map((row) => row.client_id);
     const dailyRows = await checks(first.dailyEventId);
-    assert.equal(dailyRows.length, 8);
+    assert.equal(dailyRows.length, 20);
     assert.deepEqual(new Set(dailyRows.map((row) => row.client_id)), new Set(patientIds));
     assert.ok(rows.every((row) => row.status === "queued" && row.next_action_at === null));
     assert.ok(rows.every((row) => row.client.phone.startsWith("+120255501")));
@@ -57,7 +57,7 @@ async function main() {
     assert.equal(prior.json.data.source, "none");
     assert.ok(prior.json.data.priorDaily?.rideQuote);
     assert.equal(Object.keys(prior.json.data.priorDaily.answers).length, 8);
-    assertions.push("Start is idempotent; exactly eight fictional patients have saved prior care and ride evidence.");
+    assertions.push("Start is idempotent; exactly twenty fictional patients have saved prior care and ride evidence.");
     assert.equal((await request("/api/demo/disaster", { action: "step", sessionId, eventId, step: 2 })).status, 409);
     assert.equal((await request("/api/demo/disaster", { action: "step", sessionId, eventId: randomUUID(), step: 0 })).status, 404);
     assertions.push("Out-of-order steps and an arbitrary event ID are rejected.");
@@ -99,11 +99,20 @@ async function main() {
     assert.equal(unreachable.ladder_step, 4);
     assert.equal(handoff.nurse_transfer?.status, "connected");
     assert.equal(handoff.status, "needs_human");
+    assert.ok(rows.every(row => !["queued", "calling"].includes(row.status)), "Every fictional resident has an explicit outcome; no phantom calls remain live.");
     assert.ok(rows.every((row) => row.handled_at === null), "The AI never resolves or dispatches care.");
     assertions.push("Final state retains unreachable and human-handoff needs; nobody is marked handled or dispatched.");
     if (before?.length) {
-      const { data: after } = await db.from("checks").select("id,updated_at").in("id", before.map((row) => row.id));
-      assert.deepEqual(new Map(after?.map((row) => [row.id, row.updated_at])), new Map(before.map((row) => [row.id, row.updated_at])));
+      // Bound the filter size so an accumulated local fixture database cannot
+      // exceed the HTTP URL limit and masquerade as missing records.
+      for (let offset = 0; offset < before.length; offset += 50) {
+        const batch: { id: string; updated_at: string }[] = before.slice(offset, offset + 50);
+        const { data: after, error: readError } = await db.from("checks").select("id,updated_at").in("id", batch.map(row => row.id));
+        assert.equal(readError, null, "Existing records must remain readable.");
+        const unchanged = new Map(after?.map(row => [row.id, row.updated_at]));
+        assert.equal(unchanged.size, batch.length, "An existing record disappeared.");
+        for (const row of batch) assert.equal(unchanged.get(row.id), row.updated_at, "An existing record changed during this isolated verification.");
+      }
     }
     assertions.push("Checks that existed before this replay remain untouched.");
     complete = true;

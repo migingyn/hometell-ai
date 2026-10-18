@@ -2,7 +2,7 @@ import "./env";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import Retell from "retell-sdk";
-import { rehearsalAgentPlan, REHEARSAL_AGENT_NAME, REHEARSAL_PROMPT } from "./rehearsal-agent-plan";
+import { matchesRehearsalSettings, rehearsalAgentPlan, REHEARSAL_AGENT_NAME, REHEARSAL_PROMPT } from "./rehearsal-agent-plan";
 import { validatePublicUrl } from "./configure-voice-agent";
 
 const statePath = ".local/rehearsal-agent.json";
@@ -36,19 +36,33 @@ async function main() {
   const state: State = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
   let existing = state.agentId ? await api.agent.retrieve(state.agentId, typeof state.version === "number" ? { version: state.version } : undefined) : undefined;
   if (existing && existing.agent_name !== REHEARSAL_AGENT_NAME) throw new Error("Saved agent is not owned by the rehearsal setup");
-  if (existing?.is_published && existing.webhook_url === plan.agent.webhook_url && state.publicUrl === publicUrl) {
+  const engine = existing?.response_engine;
+  const currentLlm = engine?.type === "retell-llm" ? await api.llm.retrieve(engine.llm_id, engine.version == null ? undefined : { version: engine.version }) : undefined;
+  if (existing?.is_published && matchesRehearsalSettings(existing, plan.agent) && matchesRehearsalSettings(currentLlm, plan.llm)) {
+    state.llmId = currentLlm!.llm_id; state.llmVersion = currentLlm!.version;
+    state.publicUrl = publicUrl;
     state.published = true; saveState(state);
-    console.log("Rehearsal agent is already published with this callback. No calls placed.");
+    console.log("Published rehearsal prompt and settings already match. No calls placed.");
   } else {
     if (existing?.is_published) {
       const draft = await api.agent.createVersion(existing.agent_id, { base_version: existing.version });
       existing = await api.agent.retrieve(existing.agent_id, { version: draft.version });
+      state.version = draft.version; state.published = false; saveState(state);
     }
-    if (!state.llmId) {
+    const draftEngine = existing?.response_engine;
+    if (existing) {
+      if (existing.is_published || draftEngine?.type !== "retell-llm" || draftEngine.version !== existing.version) throw new Error("Expected an unpublished rehearsal response engine matching the agent version");
+      phase = "update draft language model";
+      // Creating an agent version also creates its matching engine version.
+      // Update that draft only; the previous published engine stays intact.
+      const llm = await api.llm.update(draftEngine.llm_id, { ...plan.llm, version: existing.version });
+      state.llmId = llm.llm_id; state.llmVersion = llm.version; saveState(state);
+    } else if (!state.llmId || !matchesRehearsalSettings(await api.llm.retrieve(state.llmId, state.llmVersion == null ? undefined : { version: state.llmVersion }), plan.llm)) {
       phase = "create language model";
       const llm = await api.llm.create(plan.llm);
       state.llmId = llm.llm_id; state.llmVersion = llm.version; saveState(state);
     }
+    if (!state.llmId) throw new Error("Rehearsal response engine is missing");
     const response_engine = { type: "retell-llm" as const, llm_id: state.llmId, version: state.llmVersion };
     phase = "create or update rehearsal agent";
     const agent = existing
@@ -56,13 +70,18 @@ async function main() {
       : await api.agent.create({ ...plan.agent, response_engine });
     state.agentId = agent.agent_id; state.version = agent.version; state.publicUrl = publicUrl; state.published = false; saveState(state);
     phase = "publish rehearsal agent";
-    await api.agent.publish(agent.agent_id, { version: agent.version });
+    // This endpoint may return an empty/non-JSON success body. Confirm the
+    // publication by retrieving it below instead of parsing that body.
+    await api.agent.publish(agent.agent_id, { version: agent.version }).asResponse();
     let verified = await api.agent.retrieve(agent.agent_id, { version: agent.version });
     for (let attempt = 0; !verified.is_published && attempt < 3; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 300));
       verified = await api.agent.retrieve(agent.agent_id, { version: agent.version });
     }
-    if (!verified.is_published || verified.webhook_url !== plan.agent.webhook_url) throw new Error("Published rehearsal settings could not be verified");
+    const verifiedEngine = verified.response_engine;
+    const verifiedLlm = verifiedEngine.type === "retell-llm" ? await api.llm.retrieve(verifiedEngine.llm_id, verifiedEngine.version == null ? undefined : { version: verifiedEngine.version }) : undefined;
+    if (!verified.is_published || !matchesRehearsalSettings(verified, plan.agent) || !matchesRehearsalSettings(verifiedLlm, plan.llm)) throw new Error("Published rehearsal prompt and settings could not be verified");
+    state.llmId = verifiedLlm!.llm_id; state.llmVersion = verifiedLlm!.version;
     state.published = true; saveState(state);
   }
   const token = process.env.HEARTBEAT_REHEARSAL_TOKEN || randomBytes(32).toString("base64url");
@@ -75,6 +94,11 @@ async function main() {
 }
 void main().catch((error: unknown) => {
   const status = typeof error === "object" && error && "status" in error ? error.status : undefined;
+  if (status === 400 && error instanceof Error) {
+    let detail = error.message;
+    for (const [key, value] of Object.entries(process.env)) if (value && value.length >= 6 && /KEY|TOKEN|SECRET|PASSWORD|PHONE|NUMBER|URL/.test(key)) detail = detail.split(value).join("[redacted]");
+    console.error(`Provider validation: ${detail.replace(/https?:\/\/[^\s"<>]+/g, "[URL]").slice(0, 700)}`);
+  }
   console.error(`Rehearsal agent setup did not complete during ${phase}${status ? ` (provider HTTP ${status})` : ""} (${error instanceof Error ? error.name : "error"}). Saved setup state is retained. No calls were placed; check required settings and the provider dashboard.`);
   process.exitCode = 1;
 });

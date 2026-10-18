@@ -7,3 +7,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Current project coordination
+
+Read `.hackathon/CURRENT_DEMO.md` before planning or editing this project. It records the latest demo scope, verified gaps, parallel work and unresolved inputs. Follow the latest human instructions when they supersede that brief. Earlier handoff/context files preserve history and may contain stale status claims. Check the working tree and avoid overlapping edits to another active workstream's files.

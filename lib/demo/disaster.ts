@@ -8,7 +8,7 @@ import { POSTOP_FIELDS } from "@/lib/postop/types";
 import type { Check, Client, EventMode, RetellCall } from "@/lib/types";
 
 export const DISASTER_DEMO_LABELS = [
-  "Agency check-ins are calling eight enrolled patients",
+  "Agency check-ins are calling twenty enrolled patients",
   "Calm danger leads the queue; distress stays separate",
   "Existing ride and powered-equipment needs become actionable",
   "One patient is unanswered; three more report their circumstances",
@@ -35,9 +35,9 @@ function id(session: string, name: string) {
 }
 function ids(session: string) {
   return { event: id(session, "crisis"), daily: id(session, "daily"),
-    clients: Array.from({ length: 8 }, (_, index) => id(session, `patient:${index}`)),
-    checks: Array.from({ length: 8 }, (_, index) => id(session, `crisis-check:${index}`)),
-    baseline: Array.from({ length: 8 }, (_, index) => id(session, `daily-check:${index}`)) };
+    clients: Array.from({ length: PEOPLE.length }, (_, index) => id(session, `patient:${index}`)),
+    checks: Array.from({ length: PEOPLE.length }, (_, index) => id(session, `crisis-check:${index}`)),
+    baseline: Array.from({ length: PEOPLE.length }, (_, index) => id(session, `daily-check:${index}`)) };
 }
 const PEOPLE = [
   { name: "Evelyn Brooks", risk_tier: "red", lives_alone: true, uses_powered_equipment: false, needs_ride: true, lat: 34.1902, lng: -118.1518 },
@@ -48,7 +48,70 @@ const PEOPLE = [
   { name: "Patricia Coleman", risk_tier: "yellow", lives_alone: false, uses_powered_equipment: false, needs_ride: false, lat: 34.1849, lng: -118.1512 },
   { name: "James Wilson", risk_tier: "green", lives_alone: false, uses_powered_equipment: false, needs_ride: false, lat: 34.1900, lng: -118.1417 },
   { name: "Amina Hassan", risk_tier: "yellow", lives_alone: false, uses_powered_equipment: false, needs_ride: false, lat: 34.1991, lng: -118.1476 },
+  {"name": "Gloria Martinez", "risk_tier": "yellow", "lives_alone": true, "uses_powered_equipment": false, "needs_ride": true, "lat": 34.1957, "lng": -118.1602},
+  {"name": "Thomas Bennett", "risk_tier": "green", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.2006, "lng": -118.1584},
+  {"name": "Linda Park", "risk_tier": "yellow", "lives_alone": true, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.1831, "lng": -118.1555},
+  {"name": "Samuel Ortiz", "risk_tier": "red", "lives_alone": true, "uses_powered_equipment": true, "needs_ride": true, "lat": 34.2014, "lng": -118.143},
+  {"name": "Grace Turner", "risk_tier": "yellow", "lives_alone": true, "uses_powered_equipment": false, "needs_ride": true, "lat": 34.1884, "lng": -118.1624},
+  {"name": "Robert Davis", "risk_tier": "green", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.1818, "lng": -118.1464},
+  {"name": "Mei Lin", "risk_tier": "yellow", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": true, "lat": 34.1962, "lng": -118.1388},
+  {"name": "William Carter", "risk_tier": "green", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.2024, "lng": -118.1517},
+  {"name": "Sofia Reyes", "risk_tier": "yellow", "lives_alone": true, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.1853, "lng": -118.1418},
+  {"name": "George Adams", "risk_tier": "green", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.193, "lng": -118.165},
+  {"name": "Nadia Ahmed", "risk_tier": "yellow", "lives_alone": false, "uses_powered_equipment": false, "needs_ride": false, "lat": 34.1788, "lng": -118.1511},
+  {"name": "Helen Morris", "risk_tier": "yellow", "lives_alone": true, "uses_powered_equipment": false, "needs_ride": true, "lat": 34.205, "lng": -118.155},
 ] satisfies Array<Pick<Client, "name" | "risk_tier" | "lives_alone" | "uses_powered_equipment" | "needs_ride" | "lat" | "lng">>;
+
+export const BACKGROUND_RESPONSES = [
+  {
+    "text": "I need a ride to leave. My daughter cannot reach me by car.",
+    "status": "needs_help"
+  },
+  {
+    "text": "I am at the shelter with my wife. We have food and water.",
+    "status": "ok"
+  },
+  {
+    "text": "I am with my neighbor. We can leave together in her car.",
+    "status": "ok"
+  },
+  {
+    "text": "The electricity is out and my powered equipment has no backup. I need help leaving.",
+    "status": "needs_help"
+  },
+  {
+    "text": "",
+    "status": "no_answer"
+  },
+  {
+    "text": "I have reached my son\u2019s home. I have my medications with me.",
+    "status": "ok"
+  },
+  {
+    "text": "I need a ride to the shelter. I am waiting with my husband.",
+    "status": "needs_help"
+  },
+  {
+    "text": "I am okay. My family is with me and we can leave on our own.",
+    "status": "ok"
+  },
+  {
+    "text": "",
+    "status": "no_answer"
+  },
+  {
+    "text": "I am at my sister\u2019s house away from the smoke. I have food and water.",
+    "status": "ok"
+  },
+  {
+    "text": "I am with my family at the shelter. I have my medications.",
+    "status": "ok"
+  },
+  {
+    "text": "I cannot get to the shelter on my own. I need someone to arrange a ride.",
+    "status": "needs_help"
+  }
+] as const;
 
 async function ownedSession(sessionId: string, eventId: string) {
   const expected = ids(sessionId);
@@ -68,7 +131,7 @@ async function state(sessionId: string, eventId: string) {
   const step = completed.length ? Math.max(...completed) : -2;
   return { sessionId, eventId, dailyEventId: own.daily, step, totalSteps: DISASTER_DEMO_LABELS.length,
     label: step < 0 ? "Prior care records and evacuation needs are ready" : DISASTER_DEMO_LABELS[step],
-    done: step === DISASTER_DEMO_LABELS.length - 1, simulated: true as const, patientCount: 8,
+    done: step === DISASTER_DEMO_LABELS.length - 1, simulated: true as const, patientCount: PEOPLE.length,
     focusClientId: own.clients[step < 0 ? 0 : [0, 0, 2, 4, 4, 0][step]] };
 }
 
@@ -165,7 +228,7 @@ export async function startDisasterDemo(requestedSessionId: string = randomUUID(
       phone: `+120255501${String(10 + index).padStart(2, "0")}`, emergency_contact_phone: `+120255501${String(30 + index).padStart(2, "0")}`,
       emergency_contact_name: `Fictional replay contact [${sessionId}]`, language: "en", last_daily_at: priorAt,
     })), { onConflict: "id", ignoreDuplicates: true });
-    if (clientError) throw new DemoError("Cannot create the eight fictional replay patients.", 500);
+    if (clientError) throw new DemoError("Cannot create the fictional replay patients.", 500);
     const { error: priorError } = await db.from("events").upsert({ id: own.daily, type: "daily", started_at: priorAt, alert_text: `${PREFIX} [${sessionId}] — prior daily care record` }, { onConflict: "id", ignoreDuplicates: true });
     if (priorError) throw new DemoError("Cannot save prior care context.", 500);
     const { error: checksError } = await db.from("checks").upsert(PEOPLE.flatMap((_, index) => [
@@ -215,6 +278,12 @@ export async function stepDisasterDemo(sessionId: string, eventId: string, reque
       await save(5, "I am okay. I am with my family and I can leave on my own.", { client_status: "ok" });
       await save(6, "I am okay. I am at the shelter and have food and water.", { client_status: "ok" });
       await save(7, "I am okay. I have my medications and I am with my family at the shelter.", { client_status: "ok" });
+      for (let extra = 0; extra < BACKGROUND_RESPONSES.length; extra++) {
+        const response = BACKGROUND_RESPONSES[extra];
+        await save(extra + 8, response.text, response.status === "no_answer" ? {} : {
+          client_status: response.status, ...(response.status === "needs_help" ? { request: response.text } : {}),
+        }, { noAnswer: response.status === "no_answer" });
+      }
     } else if (requestedStep === 4) {
       await updateReplayCheck(sessionId, 4, { status: "calling", ladder_step: 1, last_call_id: callId(sessionId, 4, "retry") });
       await save(4, "", {}, { attempt: "retry", noAnswer: true });

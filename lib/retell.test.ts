@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { config } from "./config";
-import { createPhoneCall, getHeartbeatCallingReadiness, getPhoneCall, placeCall, verifyWebhook } from "./retell";
+import { createPhoneCall, getHeartbeatCallingReadiness, getPhoneCall, placeCall, verifyWebhook, verifyRetellSignature } from "./retell";
 import { buildLlmUpdate, configureVoiceAgent, validatePublicUrl } from "../scripts/configure-voice-agent";
 import { buildSeedClients } from "../scripts/seed";
 import { buildFakeWebhook } from "../scripts/fake-webhook";
@@ -12,13 +12,14 @@ import { POSTOP_ANALYSIS_FIELDS } from "./postop/analysis-schema";
 import { buildPostOpAssessment } from "./postop/assessment";
 import { POST as startHeartbeatEvent } from "../app/api/events/start/route";
 
-const envKeys = ["RETELL_API_KEY", "RETELL_FROM_NUMBER", "RETELL_AGENT_ID", "VOICE_PUBLIC_URL", "HEARTBEAT_PUBLIC_URL", "APP_URL", "RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID", "ON_CALL_NURSE_PHONE"] as const;
+const envKeys = ["RETELL_API_KEY", "RETELL_WEBHOOK_KEY", "RETELL_FROM_NUMBER", "RETELL_AGENT_ID", "VOICE_PUBLIC_URL", "HEARTBEAT_PUBLIC_URL", "APP_URL", "RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID", "ON_CALL_NURSE_PHONE"] as const;
 const priorEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const priorMock = config.mockRetell;
 
 beforeEach(() => {
   config.mockRetell = false;
   process.env.RETELL_API_KEY = "test-retell-secret";
+  delete process.env.RETELL_WEBHOOK_KEY;
   process.env.RETELL_FROM_NUMBER = "+12025550101";
   process.env.RETELL_AGENT_ID = "agent_test";
   process.env.VOICE_PUBLIC_URL = "https://voice.example.com";
@@ -110,6 +111,19 @@ test("real webhook verification checks raw body, signature, and freshness", asyn
   assert.equal(await verifyWebhook(body, signed(Date.now() - 10 * 60_000)), false);
   delete process.env.RETELL_API_KEY;
   assert.equal(await verifyWebhook(body, signature), false);
+});
+
+test("dedicated signing key takes precedence and real callback verification never bypasses mock mode", async () => {
+  const body = '{"event":"transcript_updated"}';
+  const timestamp = Date.now();
+  const signed = (key: string) => `v=${timestamp},d=${createHmac("sha256", key).update(body + timestamp).digest("hex")}`;
+  process.env.RETELL_WEBHOOK_KEY = "test-webhook-secret";
+  config.mockRetell = true;
+  assert.equal(await verifyRetellSignature(body, signed("test-webhook-secret")), true);
+  assert.equal(await verifyRetellSignature(body, signed("test-retell-secret")), false);
+  assert.equal(await verifyRetellSignature(body, null), false);
+  delete process.env.RETELL_WEBHOOK_KEY;
+  assert.equal(await verifyRetellSignature(body, signed("test-retell-secret")), true);
 });
 
 test("ordinary explicitly mocked calls and fake-webhook workflow remain available", async () => {

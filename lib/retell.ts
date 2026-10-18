@@ -193,17 +193,21 @@ export async function placeCallsInOrder(inputs: PlaceCallInput[]): Promise<Place
   return results;
 }
 
-// Checks the x-retell-signature header.
-export async function verifyWebhook(rawBody: string, signature: string | null): Promise<boolean> {
-  // This bypass exists only for the original explicit mock-call workflow.
-  // Live tool endpoints must verify with Retell.verify directly, in every mode.
-  if (config.mockRetell) return true;
-  if (!signature || !process.env.RETELL_API_KEY?.trim()) return false;
+/** Checks the exact provider body in every mode, including a real rehearsal. */
+export async function verifyRetellSignature(rawBody: string, signature: string | null): Promise<boolean> {
+  const key = process.env.RETELL_WEBHOOK_KEY?.trim() || process.env.RETELL_API_KEY?.trim();
+  if (!signature || !key) return false;
   try {
-    return await Retell.verify(rawBody, process.env.RETELL_API_KEY.trim(), signature);
+    return await Retell.verify(rawBody, key, signature);
   } catch {
     return false;
   }
+}
+
+// Only explicit mock-call routes may use this bypass. Real callbacks use the
+// strict helper above even when the rest of the roster is simulated.
+export async function verifyWebhook(rawBody: string, signature: string | null): Promise<boolean> {
+  return config.mockRetell || verifyRetellSignature(rawBody, signature);
 }
 
 function toNumber(input: PlaceCallInput): string {

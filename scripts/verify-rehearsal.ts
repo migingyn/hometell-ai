@@ -62,7 +62,7 @@ async function main() {
     assert.equal(parallel.filter((result) => !result.duplicate).length, 1);
     assert.equal(parallel.filter((result) => result.duplicate).length, 1);
     assert.equal(providerRequests, 1, "Exactly one intercepted request reaches the fixed recipient");
-    assert.ok((await reserve(randomUUID(), cases![1].id)).error, "Only one real participant per replay");
+    assert.ok((await reserve(randomUUID(), cases![1].id)).error, "An active call blocks a simultaneous second participant");
     assertions.push("Completed owned replay and one-case reservation enforced; concurrent duplicate starts produce exactly one intercepted provider request.");
     const binding = await db.rpc("bind_heartbeat_rehearsal", { p_request_id: requestId, p_call_id: callId, p_uncertain: false });
     assert.equal(binding.error, null);

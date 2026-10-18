@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import Retell from "retell-sdk";
+import { verifyRetellSignature } from "@/lib/retell";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase";
 import { evidenceTurns } from "@/lib/demo/evidence";
@@ -23,6 +23,18 @@ export type RehearsalRow = {
   call_id: string | null; status: "reserved" | "requested" | "ongoing" | "ended" | "analyzed" | "unknown" | "error";
   turns: { role: "agent" | "user"; content: string }[]; transcript: string | null;
   turn_count: number; recording_available: boolean; updated_at: string; raw: { call?: Call } | null;
+  acoustic_status?: VoiceAnalysis["status"];
+  acoustic_signal?: "elevated" | "uncertain" | null;
+  acoustic_updated_at?: string | null;
+  acoustic_attempts?: number;
+  acoustic_retry_at?: string | null;
+  acoustic_lease_until?: string | null;
+};
+export type VoiceAnalysis = {
+  status: "waiting_for_call" | "waiting_for_recording" | "processing" | "available" | "insufficient_audio" | "unavailable";
+  signal: "elevated" | "uncertain" | null;
+  updatedAt: string | null;
+  retryPending: boolean;
 };
 const E164 = /^\+[1-9]\d{7,14}$/;
 const API = "https://api.retellai.com";
@@ -86,23 +98,36 @@ export function publicRehearsal(row: RehearsalRow | null) {
   return { requestId: row.request_id, callId: row.call_id, status: row.status, updatedAt: row.updated_at,
     turns: row.turns, transcript: row.transcript, recordingAvailable: row.recording_available,
     audioUrl: row.recording_available ? `/api/demo/rehearsal/recording?checkId=${encodeURIComponent(row.check_id)}` : null,
-    simulated: false as const };
+    voiceAnalysis: rehearsalVoiceAnalysis(row), simulated: false as const };
 }
 
-export async function startRehearsal(input: Input) {
-  if (!rehearsalReadiness().configured) throw new RehearsalError("The teammate call is not configured yet. No call was placed.", 503);
+export function rehearsalVoiceAnalysis(row: RehearsalRow): VoiceAnalysis {
+  const stored = row.acoustic_status ?? "waiting_for_call";
+  const status = stored === "waiting_for_call" && ["ended", "analyzed"].includes(row.status) ? "waiting_for_recording" : stored;
+  return { status, signal: status === "available" ? row.acoustic_signal ?? "uncertain" : null,
+    updatedAt: row.acoustic_updated_at ?? null,
+    retryPending: status === "waiting_for_recording" && Boolean(row.acoustic_retry_at) };
+}
+
+export async function startRehearsal(input: Input, env: Record<string, string | undefined> = process.env) {
+  if (!rehearsalReadiness(env).configured) throw new RehearsalError("The teammate call is not configured yet. No call was placed.", 503);
   const db = supabaseAdmin();
   const { data: claim, error } = await db.rpc("reserve_heartbeat_rehearsal", {
     p_request_id: input.requestId, p_session_id: input.sessionId, p_event_id: input.eventId,
-    p_check_id: input.checkId, p_agent_id: process.env.RETELL_REHEARSAL_AGENT_ID!.trim(),
+    p_check_id: input.checkId, p_agent_id: env.RETELL_REHEARSAL_AGENT_ID!.trim(),
   });
-  if (error) throw new RehearsalError("Complete the sample replay and select one open case. Only one real call is allowed per replay.", 409);
+  if (error) {
+    if (error.message.includes("REHEARSAL_CALL_UNCERTAIN")) throw new RehearsalError("A previous teammate call has an unconfirmed outcome. Check and resolve that attempt before starting another. No new call was placed.", 409);
+    if (error.message.includes("REHEARSAL_CALL_ACTIVE")) throw new RehearsalError("Another teammate call is active or still being confirmed. Review that call before starting a new one. No new call was placed.", 409);
+    if (error.message.includes("REHEARSAL_CALL_COOLDOWN")) throw new RehearsalError("A teammate call just ended. Wait 60 seconds before starting another. No new call was placed.", 409);
+    throw new RehearsalError("Complete the sample replay and select an open resident without an existing rehearsal call.", 409);
+  }
   if (claim.duplicate) return { duplicate: true, call: publicRehearsal(claim.rehearsal) };
   try {
     const { data: check, error: checkError } = await db.from("checks").select("client:clients(name)").eq("id", input.checkId).single();
     if (checkError) throw new Error("Missing case");
     const client = check.client as unknown as { name: string };
-    const call = await provider("/v2/create-phone-call", rehearsalPhonePayload(input, client.name));
+    const call = await provider("/v2/create-phone-call", rehearsalPhonePayload(input, client.name, env));
     if (!call.call_id || typeof call.call_id !== "string" || call.call_id.startsWith("mock_")) throw new Error("Invalid call ID");
     const { data, error: bindError } = await db.rpc("bind_heartbeat_rehearsal", { p_request_id: input.requestId, p_call_id: call.call_id, p_uncertain: false });
     if (bindError) throw new Error("Call binding unavailable");
@@ -143,10 +168,16 @@ export async function saveRehearsalCall(row: RehearsalRow, event: string, call: 
     p_result: event === "call_analyzed" ? rehearsalFinalResult(call) : null,
   });
   if (error) throw new RehearsalError("The rehearsal evidence could not be saved.", 500);
+  if ((row.status === "analyzed" || event === "call_analyzed") && (call.recording_url || call.recording_multi_channel_url)) {
+    const { error: recordingError } = await supabaseAdmin().rpc("merge_heartbeat_rehearsal_recording", {
+      p_request_id: row.request_id, p_call_id: call.call_id, p_call: call,
+    });
+    if (recordingError) throw new RehearsalError("The rehearsal recording could not be saved. Apply the rehearsal acoustics migration.", 500);
+  }
 }
 
 /** Called before the ordinary mock-capable webhook. Real rehearsal callbacks always require a signature. */
-export async function interceptRehearsalWebhook(raw: string, signature: string | null): Promise<boolean> {
+export async function interceptRehearsalWebhook(raw: string, signature: string | null, onAnalyzed?: (checkId: string) => void): Promise<boolean> {
   let payload: { event?: string; call?: Call };
   try { payload = JSON.parse(raw); } catch { return false; }
   const call = payload?.call;
@@ -163,12 +194,12 @@ export async function interceptRehearsalWebhook(raw: string, signature: string |
   if (error && !requestId) return false;
   if (error) throw new RehearsalError("Cannot read rehearsal reservation.", 503);
   if (!data && !requestId) return false;
-  let signed = false;
-  try { signed = Boolean(signature && process.env.RETELL_API_KEY && await Retell.verify(raw, process.env.RETELL_API_KEY, signature)); } catch { /* rejected */ }
+  const signed = await verifyRetellSignature(raw, signature);
   if (!signed) throw new RehearsalError("A signed provider callback is required for a real rehearsal.", 401);
   if (!data) throw new RehearsalError("Unknown rehearsal reservation.", 404);
   if (!["call_started", "transcript_updated", "call_ended", "call_analyzed"].includes(payload.event ?? "")) return true;
   await saveRehearsalCall(data as RehearsalRow, payload.event!, call);
+  if (payload.event === "call_analyzed" || data.status === "analyzed") onAnalyzed?.(data.check_id);
   return true;
 }
 

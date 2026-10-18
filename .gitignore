@@ -48,3 +48,6 @@ next-env.d.ts
 /scripts/seed.local.json
 /supabase/.temp/
 /supabase/.branches/
+
+# Local screenshots and verification receipts (may contain private call evidence)
+/output/

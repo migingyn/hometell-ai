@@ -80,8 +80,18 @@ const HIGH_DISTRESS = /\b(?:i am|i'm|i feel|i'm feeling|we are|we're) (?:in (?:a
 const MODERATE_DISTRESS = /\b(?:i am|i'm|i feel|i'm feeling|we are|we're) (?:really |very |so )?(?:worried|scared|anxious|afraid|frightened|upset)\b/;
 const situationRank: Record<Situation, number> = { unknown: 0, routine: 1, needs_assistance: 2, immediate_danger: 3 };
 
+function reportedTraumaticLimbLoss(text: string): boolean {
+  // Current traumatic limb-loss wording. Past surgery/disability is not itself
+  // a new emergency; preserve ordinary negation and hypothetical handling.
+  const loss = /\b(?:arm|leg|hand|foot|finger|toe|limb)(?:'s| (?:has (?:just )?been|was|is|got|just got|just been))? (?:just )?(?:(?:chopped|cut|torn|ripped) off|severed)\b|\b(?:i|he|she|they) (?:have |has )?just lost (?:my|his|her|their|an?|the) (?:arm|leg|hand|foot|finger|toe|limb)\b/;
+  return normalize(text).split(/[.!?;\n]|\b(?:but|however|yet|although|though)\b/).some(clause => {
+    if (/\b(?:prosthetic|prosthesis|artificial|years? ago|months? ago|weeks? ago|last year|last month|last week|as a child|when i was|previously|healed)\b/.test(clause)) return false;
+    return positiveMatch(clause, loss);
+  });
+}
+
 function observedSituation(text: string): Situation {
-  if (IMMEDIATE_PATTERNS.some((pattern) => positiveMatch(text, pattern)) ||
+  if (reportedTraumaticLimbLoss(text) || IMMEDIATE_PATTERNS.some((pattern) => positiveMatch(text, pattern)) ||
       (positiveMatch(text, TRAPPED) && positiveMatch(text, RISING_WATER)) ||
       koreanReport(text, ["숨을 못 쉬", "숨을 못쉬", "숨이 안 쉬"])) return "immediate_danger";
   if (positiveMatch(text, ASSISTANCE) || positiveMatch(text, TRAPPED) ||

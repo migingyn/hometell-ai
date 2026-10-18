@@ -15,13 +15,17 @@
     "voice:configure": "tsx scripts/configure-voice-agent.ts",
     "voice:verify": "tsx scripts/verify-live-voice.ts",
     "dev:heartbeat": "next dev --hostname 127.0.0.1 --port 3017",
-    "test:heartbeat": "tsx --test lib/classifier/*.test.ts lib/acoustic/*.test.ts lib/postop/*.test.ts lib/demo/*.test.ts lib/ladder.test.ts lib/sms.test.ts lib/ordering.test.ts lib/priority-ordering.test.ts",
+    "test:heartbeat": "tsx --test lib/classifier/*.test.ts lib/acoustic/*.test.ts lib/postop/*.test.ts lib/demo/*.test.ts lib/transcript/*.test.ts lib/ladder.test.ts lib/sms.test.ts lib/ordering.test.ts lib/priority-ordering.test.ts components/operations/*.test.ts",
     "seed": "tsx scripts/seed.ts",
     "heartbeat:agents": "tsx scripts/configure-heartbeat-agents.ts",
     "verify:heartbeat": "tsx scripts/verify-heartbeat.ts",
     "verify:postop": "tsx scripts/verify-postop.ts",
+    "verify:answer-reviews": "tsx scripts/verify-answer-reviews.ts",
+    "verify:live-transcripts": "tsx scripts/verify-live-transcripts.ts",
     "verify:disaster": "tsx scripts/verify-disaster-demo.ts",
-    "setup:heartbeat-local": "tsx scripts/setup-heartbeat-local.ts"
+    "setup:heartbeat-local": "tsx scripts/setup-heartbeat-local.ts",
+    "dev:smoove": "NEXT_PUBLIC_HEARTBEAT_MAP_URL=http://127.0.0.1:5180/heartbeat next dev --hostname 127.0.0.1 --port 3021",
+    "dev:smoove-map": "VITE_HEARTBEAT_URL=http://127.0.0.1:3021 HEARTBEAT_API_TARGET=http://127.0.0.1:3021 npm --prefix crisis-la run dev -- --port 5180"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

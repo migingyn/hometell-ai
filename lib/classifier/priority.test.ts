@@ -18,6 +18,27 @@ test("calm immediate danger outranks panicked routine circumstances", () => {
   assert.equal(panic.distress, "high");
 });
 
+test("a calm current traumatic limb-loss report stays immediate during and after the call", () => {
+  for (const text of ["My leg got chopped off, but I'm really calm about it.", "My leg's chopped off.",
+    "My arm has just been torn off.", "Her hand is severed.", "I just lost my foot."]) {
+    for (const stage of ["live", "post_call"] as const) {
+      const result = assessCallerPriority(call(text, { call_analysis: { user_sentiment: "Positive" } }), crisis, stage);
+      assert.equal(result.situation, "immediate_danger", text);
+      assert.equal(result.priority, "immediate", text);
+      assert.ok(result.evidence.some(item => item.quote === text));
+    }
+  }
+});
+
+test("past limb loss, prosthetics, negation, and hypothetical injuries are not new traumatic emergencies", () => {
+  for (const text of ["My leg was chopped off years ago, and I am okay.", "My prosthetic leg got cut off.",
+    "My leg has not been chopped off.", "My leg wasn't cut off.", "What if my leg got chopped off?",
+    "My leg was severed last year.", "I had a planned amputation."]) {
+    assert.notEqual(assessCallerPriority(call(text), crisis).priority, "immediate", text);
+  }
+  assert.equal(assessCallerPriority(call("My leg was severed years ago, but I am bleeding heavily now."), crisis).priority, "immediate");
+});
+
 test("clear positive threat reports trigger immediate operator review", () => {
   for (const text of ["I can't breathe.", "My mother cannot breathe.", "I am bleeding severely.",
     "The roof is collapsing.", "My house is on fire.", "There are flames in my kitchen.",

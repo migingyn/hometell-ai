@@ -5,7 +5,7 @@ import { fail, ok } from "@/lib/api";
 import { getCheckWithClient, getCheckEvent } from "@/lib/checks";
 import { classifyCall } from "@/lib/classifier";
 import { applyCallResult } from "@/lib/ladder";
-import { verifyWebhook } from "@/lib/retell";
+import { verifyRetellSignature, verifyWebhook } from "@/lib/retell";
 import { alertCoordinator } from "@/lib/sms";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normalizeMode } from "@/lib/mode";
@@ -17,8 +17,11 @@ import { isNurseTransferEvent } from "@/lib/postop/transfer";
 import { reportedRideNeed } from "@/lib/postop/ride";
 import type { Check, RetellCall } from "@/lib/types";
 import { interceptRehearsalWebhook, RehearsalError } from "@/lib/demo/rehearsal";
+import { processRehearsalAcoustics } from "@/lib/demo/rehearsal-acoustic";
+import { saveTranscript } from "@/lib/transcript/store";
+import type { TranscriptEvent } from "@/lib/transcript/snapshot";
 
-export const maxDuration = 180;
+export const maxDuration = 240;
 
 function scheduleAcoustics(checkId: string, call: RetellCall) {
   if (!process.env.ACOUSTIC_SERVICE_URL?.trim() || process.env.MOCK_RETELL === "true" || !call.metadata) return;
@@ -49,7 +52,12 @@ const Payload = z.object({
 export async function POST(req: Request) {
   const raw = await req.text();
   try {
-    if (await interceptRehearsalWebhook(raw, req.headers.get("x-retell-signature"))) return ok({ rehearsal: true });
+    if (await interceptRehearsalWebhook(raw, req.headers.get("x-retell-signature"), (checkId) => {
+      after(async () => {
+        try { await processRehearsalAcoustics(checkId); }
+        catch { console.warn("Rehearsal voice analysis will recover on a later status refresh."); }
+      });
+    })) return ok({ rehearsal: true });
   } catch (error) {
     return fail(error instanceof RehearsalError ? error.message : "Cannot save rehearsal callback.", error instanceof RehearsalError ? error.status : 500);
   }
@@ -107,9 +115,15 @@ export async function POST(req: Request) {
 
   const live = parsed.data.event === "transcript_updated";
   const transfer = isNurseTransferEvent(parsed.data.event);
-  if (!live && !transfer && parsed.data.event !== "call_analyzed") return ok({ ignored: parsed.data.event });
+  const transcriptEvent = ["call_started", "transcript_updated", "call_ended", "call_analyzed"].includes(parsed.data.event);
+  if (!transcriptEvent && !transfer) return ok({ ignored: parsed.data.event });
 
   const call = parsed.data.call as RetellCall;
+  // Global mock mode permits only explicit mock IDs to bypass signing. A real
+  // ordinary-call transcript must be authenticated even during a sample demo.
+  if (!call.call_id.startsWith("mock_") && !(await verifyRetellSignature(raw, req.headers.get("x-retell-signature")))) {
+    return fail("Bad signature", 401);
+  }
   let meta = call.metadata;
 
   try {
@@ -147,6 +161,12 @@ export async function POST(req: Request) {
       }
       return ok(applied ?? { skipped: "not_applied" });
     }
+    if (meta.target !== (check.ladder_step === 3 ? "emergency_contact" : "client")) return ok({ skipped: "wrong_target" });
+    const transcript = await saveTranscript(check.id, meta.target, parsed.data.event as TranscriptEvent, call);
+    // Ended is transport evidence only: do not consume the final call-log slot.
+    // Analyzed always continues to the existing atomic result ledger, including
+    // after a retry whose transcript snapshot already committed successfully.
+    if (parsed.data.event === "call_started" || parsed.data.event === "call_ended" || (live && !transcript.applied && !transcript.duplicate)) return ok(transcript);
     if (live) {
       const assessment = assessCallerPriority(call, { mode, target: meta.target, contactName: check.client.emergency_contact_name }, "live");
       const turns = call.transcript_object ?? call.transcript_with_tool_calls;

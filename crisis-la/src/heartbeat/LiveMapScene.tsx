@@ -94,7 +94,7 @@ export default function LiveMapScene({ people, mode, selectedId, onSelect, reduc
     const lat = valid ? selected.client.lat! : CENTER.lat;
     instance.camera.cancelFlight();
     const target = Cesium.Cartesian3.fromDegrees(lng, lat);
-    const offset = new Cesium.HeadingPitchRange(Cesium.Math.toRadians(10), Cesium.Math.toRadians(-55), valid ? 3700 : 10500);
+    const offset = new Cesium.HeadingPitchRange(Cesium.Math.toRadians(10), Cesium.Math.toRadians(-55), valid ? 5000 * Math.max(1, 300 / Math.max(180, instance.canvas.clientHeight)) : 10500);
     if (reducedMotion || !selected) { instance.camera.lookAt(target, offset); instance.camera.lookAtTransform(Cesium.Matrix4.IDENTITY); }
     else { void instance.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 0), { duration: .8, offset }); }
   }, [selectedId, selected?.client.lat, selected?.client.lng, ready, reset, reducedMotion, status]);
