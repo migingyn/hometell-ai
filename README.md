@@ -1,5 +1,7 @@
 # Heartbeat
 
+**[Open the live Heartbeat demo](https://heartbeat-demo-three.vercel.app/)**
+
 Post-operative check-ins and crisis outreach for a clinical home-health agency's enrolled patients. A nurse or coordinator uses one website; patients answer their regular phones. The same roster, Retell agents, and Supabase records support both modes.
 
 **Run morning check-ins** collects pain, incision, fever, breathing, appetite, weight, medications, and falls. Cards show exact patient quotes, missing answers, changes since the previous call, and a proposed next step for nurse approval. Reported severity sorts before expressed distress; distress only advances review within the same severity tier. **Start crisis check** reads the coordinator's alert verbatim and retains the unanswered-call ladder and evacuation-help flags. Heartbeat does not diagnose, give medical advice, make evacuation decisions, or dispatch emergency services.
