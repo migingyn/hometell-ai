@@ -22,8 +22,10 @@ export async function verifyRetellSignature(rawBody: string, signature: string |
     console.warn("[retell] SKIP_SIGNATURE_CHECK=true, not checking signature. Local testing only.");
     return true;
   }
-  if (!signature || !config.retellApiKey) return false;
-  return Retell.verify(rawBody, config.retellApiKey, signature);
+  if (!signature || !config.retellWebhookKey) return false;
+  const ok = await Retell.verify(rawBody, config.retellWebhookKey, signature);
+  if (!ok) console.warn("[retell] bad signature. Set RETELL_WEBHOOK_KEY to the Retell API key with the webhook badge.");
+  return ok;
 }
 
 // Ids we made ourselves never exist in Retell.

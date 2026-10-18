@@ -70,21 +70,22 @@ export async function watchdogTick(): Promise<{ open_line: number; never_started
     if (alert) openLine++;
   }
 
-  // 2. Crisis calls that never reached call_started within 90 seconds.
+  // 2. Calls that never reached call_started within 90 seconds. Any real call is looked up
+  // in Retell, since its webhooks may have been lost. Only crisis calls raise an alert.
   const startCutoff = new Date(now - NEVER_STARTED_MS).toISOString();
   const stuck = await db
     .from("calls")
-    .select("call_id, client_id, started_at, status")
-    .eq("call_type", "crisis")
+    .select("call_id, client_id, call_type, started_at, status")
     .eq("status", "registered")
     .lt("created_at", startCutoff);
   if (stuck.error) throw new Error(stuck.error.message);
-  for (const call of stuck.data as Row[]) {
+  for (const call of stuck.data as (Row & Pick<Call, "call_type">)[]) {
     // Syncing may itself raise crisis_no_response (dial_no_answer), or show the call is live.
     if (isRealCallId(call.call_id) && (await syncFromRetell(call.call_id))) {
       synced++;
       continue;
     }
+    if (call.call_type !== "crisis") continue;
     const client = await getClient(call.client_id);
     if (!client) continue;
     const alert = await createAlert({
