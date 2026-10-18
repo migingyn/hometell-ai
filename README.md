@@ -49,6 +49,7 @@ Run `npx tsx scripts/check-setup.ts` at any time. It only reads, and lists each 
 | `RETELL_API_KEY` | Real calls (with `MOCK_RETELL=false`), signature checks on all three Retell routes, the watchdog's Retell lookups, both setup scripts |
 | `RETELL_WEBHOOK_KEY` | The Retell API key with the webhook badge (Settings > API Keys). Retell signs webhooks with it. Without it, webhooks are checked with `RETELL_API_KEY` and get 401 if that is a different key. The watchdog still recovers those calls from Retell within about 2 minutes |
 | `PUBLIC_BASE_URL` (ngrok https URL) | Retell can reach `/retell-webhook` and `flag_nurse`. Without it, calls are placed but no results come back |
+| `PUBLIC_API=true` | Opens `/api/*` on the public ngrok URL. Off by default, so only localhost can call `/api` and strangers cannot place calls. Retell's routes stay public either way |
 | `SEED_PHONES` | Seeded residents get real numbers. Calls to the fake 555 numbers are refused before dialing |
 | `NURSE_PHONE` | The agent's `transfer_to_nurse` tool has a number to dial (falls back to `FRONT_DESK_PHONE`) |
 | All four Twilio vars | Every alert is also texted to `FRONT_DESK_PHONE` |
