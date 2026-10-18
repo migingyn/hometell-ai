@@ -60,9 +60,18 @@ async function checkRetell() {
   } catch (e) {
     return report("FAIL", "Retell", `agent ${config.retellAgentId}: ${e instanceof Error ? e.message : e}. Check the key and RETELL_AGENT_ID.`);
   }
-  report("PASS", "Retell", `key works. Agent "${agent.agent_name}" version ${agent.version}`);
+  report("PASS", "Retell", `key works. Agent "${agent.agent_name}" latest version ${agent.version}`);
   if (!process.env.RETELL_WEBHOOK_KEY) {
     report("WARN", "Retell", "RETELL_WEBHOOK_KEY not set, so webhooks are checked with RETELL_API_KEY. If they get 401, set it to the key with the webhook badge");
+  }
+  // Calls use the published version, so check that one. A newer draft only matters once published.
+  if (!agent.is_published) {
+    const { items } = await r.agent.listVersions(agent.agent_id);
+    const published = items.filter((v) => v.is_published).sort((a, b) => b.version - a.version)[0];
+    if (published) {
+      report("WARN", "Retell agent", `version ${agent.version} is an unpublished draft. Checking published version ${published.version}, which calls use`);
+      agent = await r.agent.retrieve(agent.agent_id, { version: published.version });
+    }
   }
   report(agent.is_published ? "PASS" : "WARN", "Retell agent", agent.is_published ? "published" : "not published. Run scripts/setup-retell.ts --apply --publish when ready");
 
@@ -97,15 +106,18 @@ async function checkRetell() {
   // Phone number bound to this agent for outbound calls.
   try {
     const pn = await r.phoneNumber.retrieve(config.retellFromNumber);
-    const bound = pn.outbound_agents?.some((a) => a.agent_id === agent.agent_id);
-    report(bound ? "PASS" : "WARN", "Retell number", `${config.retellFromNumber} ${bound ? "is bound to the agent" : "is not bound to this agent. override_agent_id still works per call"}`);
+    const bound = pn.outbound_agents?.find((a) => a.agent_id === agent.agent_id);
+    const pinnedOld = bound && typeof bound.agent_version === "number" && bound.agent_version !== agent.version;
+    if (!bound) report("WARN", "Retell number", `${config.retellFromNumber} is not bound to this agent. override_agent_id still works per call`);
+    else if (pinnedOld) report("WARN", "Retell number", `${config.retellFromNumber} is pinned to version ${bound.agent_version}, not ${agent.version}. setup-retell.ts --apply --publish re-pins it`);
+    else report("PASS", "Retell number", `${config.retellFromNumber} uses agent version ${bound.agent_version}`);
   } catch (e) {
     report("FAIL", "Retell number", `${config.retellFromNumber}: ${e instanceof Error ? e.message : e}. RETELL_FROM_NUMBER must be a number in this Retell account`);
   }
 
   const engine = agent.response_engine;
   if (engine.type !== "retell-llm") return report("WARN", "Retell LLM", `response engine is ${engine.type}. Tool and prompt checks only cover retell-llm`);
-  const llm = await r.llm.retrieve(engine.llm_id);
+  const llm = await r.llm.retrieve(engine.llm_id, { version: engine.version ?? undefined });
   const tools = (llm.general_tools ?? []) as { type: string; name: string; url?: string; args_at_root?: boolean; transfer_destination?: { number?: string } }[];
 
   const flag = tools.find((t) => t.name === "flag_nurse");
