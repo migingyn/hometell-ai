@@ -1,10 +1,10 @@
 // Handles Retell call events and the flag_nurse function. Owner: Mikey.
 // Shared by POST /retell-webhook and the mock endpoints, so the demo runs the real code.
 // Idempotent: calls are keyed by call_id and alerts dedupe on call_id + type.
-import { createAlert, crisisNoResponseMessage } from "@/lib/alerts";
+import { ackAlert, createAlert, crisisNoResponseMessage } from "@/lib/alerts";
 import { dangerWordIn } from "@/lib/classifier/hardRules";
 import { config } from "@/lib/config";
-import { getCall, getClient, getTodayEntry, stripRaw } from "@/lib/db";
+import { getCall, getClient, getTodayEntry, listAlertsForCalls, stripRaw } from "@/lib/db";
 import { publish, pushClientStatus, pushCrisis, pushQuietly } from "@/lib/events";
 import { supabaseAdmin } from "@/lib/supabase";
 import type { Call, CallAnalysis, Client, DisconnectionReason, RetellCall, RetellWebhookPayload, Urgency } from "@/lib/types";
@@ -210,7 +210,9 @@ async function onAnalyzed(payload: RetellWebhookPayload, row: Call, client: Clie
   const { error } = await supabaseAdmin().from("calls").update(update).eq("call_id", row.call_id);
   if (error) throw new Error(error.message);
 
-  await analysisAlerts({ ...row, ...fields, summary: update.summary }, client, dangerWordIn(call));
+  const analyzed = { ...row, ...fields, summary: update.summary };
+  await analysisAlerts(analyzed, client, dangerWordIn(call));
+  await closeCoveredFlags(analyzed);
 }
 
 type AnalyzedCall = Pick<Call, "call_id" | "call_type" | "summary"> & CallAnalysis;
@@ -268,6 +270,30 @@ async function analysisAlerts(c: AnalyzedCall, client: Client, dangerWord: strin
   if (wellness.length) {
     const msg = wellness.join(", ");
     await alert("wellness", "today", msg[0].toUpperCase() + msg.slice(1));
+  }
+}
+
+// The agent calls flag_nurse mid-call for routine items, and the analysis then raises its own
+// alert for the same thing. Close the "today" flag when the analysis covers it, so the front
+// desk sees each issue once. Urgent flags and anything the analysis did not catch stay open.
+const COVERED_BY: { words: RegExp; covered: (c: AnalyzedCall) => boolean }[] = [
+  { words: /sleep/i, covered: (c) => c.sleep_quality === "poor" },
+  { words: /steady|unsteady|balance/i, covered: (c) => c.steady_on_feet === "no" },
+  { words: /swell/i, covered: (c) => c.new_swelling === true },
+  { words: /mood|sad|lonely|worried|down/i, covered: (c) => c.mood === "low" },
+  { words: /eat|ate|drink|food|water|hungry/i, covered: (c) => c.ate_and_drank === "no" },
+  { words: /dose|pill|med/i, covered: (c) => c.med_taken === "no" || c.med_taken === "unsure" || c.dose_question_asked === true },
+  { words: /pain|hurt/i, covered: (c) => c.pain_level != null && c.pain_level >= 4 },
+];
+
+async function closeCoveredFlags(c: AnalyzedCall) {
+  const flags = (await listAlertsForCalls([c.call_id])).filter(
+    (a) => a.type === "flag_nurse" && a.urgency === "today" && !a.acknowledged_at,
+  );
+  for (const flag of flags) {
+    if (COVERED_BY.some((rule) => rule.words.test(flag.message) && rule.covered(c))) {
+      await ackAlert(flag.id, "Covered by call analysis");
+    }
   }
 }
 
