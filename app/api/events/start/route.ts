@@ -1,3 +1,4 @@
+import { startCareCall } from "@/lib/care/service";
 import { z } from "zod";
 import { fail, ok } from "@/lib/api";
 import { getHeartbeatCallingReadiness, placeCall } from "@/lib/retell";
@@ -10,6 +11,7 @@ import type { Check, Client, HeartbeatEvent } from "@/lib/types";
 const Body = z.object({
   type: z.enum(["daily", "crisis", "heat_wave"]).default("heat_wave"),
   alert_text: z.string().min(1).max(1400).refine((text) => !!text.trim(), "Alert cannot be blank").optional(),
+  facility_id: z.enum(["hollywood", "pasadena", "culver-city"]).optional(),
   request_id: z.string().uuid().optional(),
 });
 export const maxDuration = 300;
@@ -26,7 +28,14 @@ export async function POST(req: Request) {
   }
   try {
     const db = supabaseAdmin();
-    const { data: clients, error: clientsError } = await db.from("clients").select("*");
+    let clientQuery = db.from("clients").select("*");
+    if (parsed.data.facility_id) {
+      const {data: profiles, error} = await db.from("care_profiles").select("client_id").eq("facility_id", parsed.data.facility_id);
+      if (error) return fail(error.message,500);
+      if (!profiles?.length) return fail("No enrolled residents in this facility.",400);
+      clientQuery = clientQuery.in("id", profiles.map(p => p.client_id));
+    }
+    const { data: clients, error: clientsError } = await clientQuery;
     if (clientsError) return fail(clientsError.message, 500);
     if (!clients?.length) return fail("No enrolled clients. Run npm run seed first.");
     if (!config.mockRetell && clients.some((client: Client) => /^\+1555/.test(client.phone) || /^\+1555/.test(client.emergency_contact_phone))) {
@@ -40,6 +49,10 @@ export async function POST(req: Request) {
     if (started.busy) return fail("A roster is already being called. Wait for that start to finish.", 409);
     if (started.duplicate) return ok({ event: started.event, duplicate: true });
     const event = started.event as HeartbeatEvent;
+    if (parsed.data.facility_id) {
+      const { error } = await db.from("events").update({facility_id: parsed.data.facility_id}).eq("id",event.id);
+      if (error) { await db.from("events").update({dispatching:false}).eq("id",event.id); return fail(error.message,500); }
+    }
     const sorted = sortClientsForEvent(clients as Client[], mode);
     const { data: checks, error: checksError } = await db.from("checks")
       .insert(sorted.map((client) => ({ event_id: event.id, client_id: client.id, status: "queued" }))).select();
@@ -53,6 +66,7 @@ export async function POST(req: Request) {
     for (const client of sorted) {
       const check = checkByClient.get(client.id)!;
       try {
+        if (mode === "daily") { await startCareCall(check); continue; }
         const call = await placeCall({ client, checkId: check.id, target: "client", event: event as HeartbeatEvent });
         const { error } = await db.from("checks").update({ status: "calling", last_call_id: call.callId })
           .eq("id", check.id).eq("status", "queued");

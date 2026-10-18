@@ -2,8 +2,11 @@ import React, { lazy, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 if (window.location.pathname.startsWith('/prescription')) document.title = 'SourceCheck · Prescription Case Room';
+if (window.location.pathname.startsWith('/facilities')) document.title = 'Heartbeat · LA Care Facilities';
 if (window.location.pathname.startsWith('/heartbeat')) document.title = 'Heartbeat · Live LA Check-in Map';
-const Application = window.location.pathname.startsWith('/heartbeat')
+const Application = window.location.pathname.startsWith('/facilities')
+  ? lazy(() => import('./facilities/FacilityMap'))
+  : window.location.pathname.startsWith('/heartbeat')
   ? lazy(() => import('./heartbeat/HeartbeatMap'))
   : window.location.pathname.startsWith('/prescription')
   ? lazy(() => import('./prescription/CaseRoom'))

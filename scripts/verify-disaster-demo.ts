@@ -8,6 +8,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { CheckWithClient } from "../lib/types";
 
 const base = new URL(process.env.DISASTER_DEMO_APP_URL ?? "http://127.0.0.1:3018");
+const facilityId=process.env.DISASTER_DEMO_FACILITY_ID;
 const keep = process.argv.includes("--keep");
 const sessionId = randomUUID();
 const assertions: string[] = [];
@@ -39,12 +40,16 @@ async function main() {
   let patientIds: string[] = [];
   let complete = false;
   try {
-    const first = await replay({ action: "start", sessionId });
+    const first = await replay({ action: "start", sessionId, facility_id:facilityId });
     eventId = first.eventId;
     assert.equal(first.step, -1);
     assert.equal(first.totalSteps, 6);
     assert.equal(first.simulated, true);
-    assert.deepEqual(await replay({ action: "start", sessionId }), first);
+    if(facilityId){
+      const profiles=await db.from('care_profiles').select('facility_id').in('client_id',(await checks(first.eventId)).map(c=>c.client_id));
+      assert.equal(profiles.error,null);assert.equal(profiles.data?.length,8);assert.ok(profiles.data?.every(p=>p.facility_id===facilityId));
+    }
+    assert.deepEqual(await replay({ action: "start", sessionId, facility_id:facilityId }), first);
     let rows = await checks(eventId);
     assert.equal(rows.length, 8);
     patientIds = rows.map((row) => row.client_id);

@@ -4,7 +4,7 @@ import { DemoError, getDisasterDemoState, startDisasterDemo, stepDisasterDemo } 
 
 export const maxDuration = 120;
 const Input = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("start"), sessionId: z.string().uuid().optional() }),
+  z.object({ action: z.literal("start"), sessionId: z.string().uuid().optional(), facility_id: z.enum(["hollywood","pasadena","culver-city"]).optional() }),
   z.object({ action: z.literal("step"), sessionId: z.string().uuid(), eventId: z.string().uuid(), step: z.number().int().min(0).max(5) }),
   z.object({ action: z.literal("status"), sessionId: z.string().uuid(), eventId: z.string().uuid() }),
 ]);
@@ -16,7 +16,7 @@ export async function POST(req: Request) {
   if (!parsed.success) return fail("Provide a valid replay action and session.");
   try {
     const input = parsed.data;
-    return ok(input.action === "start" ? await startDisasterDemo(input.sessionId)
+    return ok(input.action === "start" ? await startDisasterDemo(input.sessionId,input.facility_id)
       : input.action === "step" ? await stepDisasterDemo(input.sessionId, input.eventId, input.step)
         : await getDisasterDemoState(input.sessionId, input.eventId));
   } catch (error) {

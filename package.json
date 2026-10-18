@@ -21,7 +21,8 @@
     "verify:heartbeat": "tsx scripts/verify-heartbeat.ts",
     "verify:postop": "tsx scripts/verify-postop.ts",
     "verify:disaster": "tsx scripts/verify-disaster-demo.ts",
-    "setup:heartbeat-local": "tsx scripts/setup-heartbeat-local.ts"
+    "setup:heartbeat-local": "tsx scripts/setup-heartbeat-local.ts",
+    "verify:care": "tsx scripts/verify-care-workspace.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

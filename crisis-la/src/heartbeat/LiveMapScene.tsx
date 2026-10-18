@@ -4,10 +4,10 @@ import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { hasCoordinates, personState } from './feed';
 import type { MapPerson, Mode } from './feed';
 
-type Props = { people: MapPerson[]; mode: Mode; selectedId: string | null; onSelect(id: string | null): void; reducedMotion: boolean };
+type Props = { people: MapPerson[]; mode: Mode; selectedId: string | null; onSelect(id: string | null): void; reducedMotion: boolean; facilityMode?: boolean };
 const CENTER = { lat: 34.188, lng: -118.15 };
 const imagery = 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer';
-export default function LiveMapScene({ people, mode, selectedId, onSelect, reducedMotion }: Props) {
+export default function LiveMapScene({ people, mode, selectedId, onSelect, reducedMotion, facilityMode = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const pinLayer = useRef<HTMLDivElement>(null);
   const credits = useRef<HTMLDivElement>(null);
@@ -90,27 +90,27 @@ export default function LiveMapScene({ people, mode, selectedId, onSelect, reduc
     const valid = selected && hasCoordinates(selected);
     // A selected patient without a position must not appear at the map center.
     if (selected && !valid) return;
-    const lng = valid ? selected.client.lng! : CENTER.lng;
-    const lat = valid ? selected.client.lat! : CENTER.lat;
+    const lng = valid ? selected.client.lng! : facilityMode ? -118.29 : CENTER.lng;
+    const lat = valid ? selected.client.lat! : facilityMode ? 34.10 : CENTER.lat;
     instance.camera.cancelFlight();
     const target = Cesium.Cartesian3.fromDegrees(lng, lat);
-    const offset = new Cesium.HeadingPitchRange(Cesium.Math.toRadians(10), Cesium.Math.toRadians(-55), valid ? 3700 : 10500);
+    const offset = new Cesium.HeadingPitchRange(Cesium.Math.toRadians(10), Cesium.Math.toRadians(-55), facilityMode ? (valid ? 23000 : 70000) : valid ? 3700 : 10500);
     if (reducedMotion || !selected) { instance.camera.lookAt(target, offset); instance.camera.lookAtTransform(Cesium.Matrix4.IDENTITY); }
     else { void instance.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 0), { duration: .8, offset }); }
-  }, [selectedId, selected?.client.lat, selected?.client.lng, ready, reset, reducedMotion, status]);
+  }, [selectedId, selected?.client.lat, selected?.client.lng, ready, reset, reducedMotion, status, facilityMode]);
 
   const fallbackStyle = (person: MapPerson) => status === 'fallback' ? { left: `${Math.max(8, Math.min(92, (person.client.lng! + 118.176) / .052 * 100))}%`, top: `${Math.max(22, Math.min(84, (34.215 - person.client.lat!) / .052 * 100))}%`, visibility: 'visible' as const, transform: 'translate(-50%,-50%)' } : {};
   return <div className={`hm-map-scene ${status === 'fallback' ? 'hm-map-fallback' : ''}`}>
-    <div className="hm-cesium-host" ref={host} aria-label="Interactive satellite map around west Altadena" />
+    <div className="hm-cesium-host" ref={host} aria-label={facilityMode ? "Interactive satellite map of Los Angeles care facilities" : "Interactive satellite map around west Altadena"} />
     {status === 'fallback' && <div className="hm-fallback-geography"><svg viewBox="0 0 1000 850" preserveAspectRatio="none" aria-hidden="true"><defs><pattern id="hm-grid" width="60" height="60" patternUnits="userSpaceOnUse"><path d="M60 0H0V60" fill="none" stroke="#4a6871" strokeWidth=".6" /></pattern></defs><rect width="1000" height="850" fill="url(#hm-grid)" /><g fill="none" stroke="#617e74" opacity=".22">{[0, 30, 60, 90, 120, 150].map((offset) => <path key={offset} d={`M-60 ${180 + offset}Q180 ${-70 + offset} 420 ${140 + offset}T1060 ${60 + offset}`} />)}</g><text x="450" y="160">SAN GABRIEL MOUNTAINS</text><text x="430" y="530">WEST ALTADENA</text><text x="490" y="730">PASADENA</text></svg></div>}
     <div className="hm-map-vignette" />
     <div className="hm-map-controls"><button onClick={() => { onSelect(null); setReset((value) => value + 1); }}>Recenter map<span>↗</span></button><span>{status === 'satellite' ? 'SATELLITE' : status === 'fallback' ? 'GEOGRAPHIC FALLBACK' : 'LOADING IMAGERY'}</span></div>
     <div className="hm-live-pins" ref={pinLayer}>{positioned.map((person) => {
-      const state = personState(person, mode);
+      const state = facilityMode ? {tone:'blue',label:'Select facility'} : personState(person, mode);
       const selected = selectedId === person.client.id;
-      return <button className={`hm-pin hm-tone-${state.tone} ${selected ? 'hm-pin-selected' : ''} ${state.tone === 'red' && mode === 'crisis' ? 'hm-pin-urgent' : ''}`} data-lat={person.client.lat} data-lng={person.client.lng} style={fallbackStyle(person)} key={person.client.id} onClick={() => onSelect(person.client.id)} aria-pressed={selected} aria-label={`${person.client.name}: ${state.label}`}><span className="hm-pin-dot"><i /></span>{selected && <span className="hm-pin-label"><small>{state.label}</small><strong>{person.client.name}</strong><span>{person.client.needs_ride ? 'Needs a ride · ' : ''}Fictional position</span></span>}</button>;
+      return <button className={`hm-pin hm-tone-${state.tone} ${selected ? 'hm-pin-selected' : ''} ${state.tone === 'red' && mode === 'crisis' ? 'hm-pin-urgent' : ''}`} data-lat={person.client.lat} data-lng={person.client.lng} style={fallbackStyle(person)} key={person.client.id} onClick={() => onSelect(person.client.id)} aria-pressed={selected} aria-label={facilityMode ? `Select ${person.client.name}` : `${person.client.name}: ${state.label}`}><span className="hm-pin-dot"><i /></span>{(selected || facilityMode) && <span className="hm-pin-label"><small>{state.label}</small><strong>{person.client.name}</strong><span>{person.client.needs_ride ? 'Needs a ride · ' : ''}{facilityMode?'Fictional facility location':'Fictional position'}</span></span>}</button>;
     })}</div>
-    <div className="hm-map-legend"><span><i className="hm-tone-red" />Needs a person now</span><span><i className="hm-tone-amber" />Follow up / no answer</span><span><i className="hm-tone-mint" />Confirmed okay</span><span><i className="hm-tone-blue" />Calling</span></div>
+    <div className="hm-map-legend" hidden={facilityMode}><span><i className="hm-tone-red" />Needs a person now</span><span><i className="hm-tone-amber" />Follow up / no answer</span><span><i className="hm-tone-mint" />Confirmed okay</span><span><i className="hm-tone-blue" />Calling</span></div>
     <div className="hm-map-credits"><span>{status === 'fallback' ? 'Illustrated geographic fallback · rough coordinates' : 'Present-day satellite imagery'}</span><div ref={credits} /></div>
   </div>;
 }

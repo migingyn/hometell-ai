@@ -88,7 +88,7 @@ export default function HeartbeatMap() {
   const total = (value: number) => feed ? String(value).padStart(2, '0') : '—';
   if (embedded) {
     const visible = visibleClientIds === null ? null : new Set(visibleClientIds);
-    const mapPeople = people.filter((person) => person.check && (!visible || visible.has(person.client.id)));
+    const mapPeople = people.filter((person) => !visible || visible.has(person.client.id));
     const select = (clientId: string | null) => {
       if (clientId !== null && !mapPeople.some((person) => person.client.id === clientId)) return;
       setSelectedId(clientId);

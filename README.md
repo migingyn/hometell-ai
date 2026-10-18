@@ -8,6 +8,22 @@ For the current build, see [the one-page plan](docs/POSTOP_PLAN.md) and [custome
 
 The working local rehearsal uses actual Supabase persistence and HTTP routes with explicitly simulated call results. No real Retell calls or Twilio delivery have been verified. See [the product scope](PRD.md), [rehearsal runbook](docs/HEARTBEAT_RUNBOOK.md), and [exact English/Korean agent prompts](docs/RETELL_AGENTS.md).
 
+## Combined care workspace (`experiment`)
+
+Open **http://localhost:3017/login** after `npm run dev:heartbeat`. The preserved Administrator/Nurse login accepts fictional credentials and stores only a tab-local demo role and fixed display name. It is not real authentication. `/` redirects to the appropriate workspace.
+
+The shared navy shell, Geist typography, neutral panels and teal controls use the original 3017 design tokens. Sidebar destinations each have a dedicated route. The combined site includes interactive satellite facility selection, My Day, resident records, daily rounds and vitals, care notes/reminders, follow-up tasks, call history, operational schedules, team/settings, daily phone outreach, and the crisis map/evidence workspace. Care screens use the existing Supabase roster, checks and call results through `/api/care/*`; they no longer use the separate 5173 mock adapter or browser-only IndexedDB. The original 5173 checkout is unchanged.
+
+Apply additive migrations through `202610170010_care_staff_assignments.sql` using `npx supabase migration up --local`. The migrations retain existing clients/calls and assign the fictional roster to three sample facilities. New clients receive a default Hollywood membership. For a fresh database, run the migrations before `npm run seed`.
+
+Measurements, appended corrections, notes, staff-approved reminders, tasks, schedules, settings and pre-call snapshots persist in local Supabase. Daily calls capture the available measurements and reminders before requesting a call; later entries do not rewrite the saved snapshot. Acknowledgement records who responded without marking an unresolved check handled. Profiles, map pins and outreach queues open the same resident record; browser history supports opening and closing that record. Follow-up tasks use shared staff IDs for creation, assignment, reassignment, acceptance, progress and completion. My Day, profiles and follow-up queues share a single workspace snapshot. Schedules are saved planning records; there is no automatic calling scheduler.
+
+The care adapter is intentionally restricted to a local mock environment; it is disabled in production and with a remote database or `MOCK_RETELL=false`. Demo role/assignment checks are presentation aids. Production use requires real authentication and server-side organization/facility memberships before enabling this adapter for real data. Existing live-provider APIs are retained, but live calls/texts remain unverified and unconfigured in this local setup.
+
+The existing satellite renderer remains on **5175**, embedded into the combined site. Start it with `npm --prefix crisis-la run dev`, using its private `.env.local` for the local Supabase URL and public anon key. The live LA satellite facility selector requires explicit selection before an Administrator opens a dashboard. A selected facility stays visible with Switch facility in the header. Nurses open My Day for their fictional assigned Hollywood facility. The existing sample disaster replay is now facility-scoped, including its eight fictional patients and prior daily records.
+
+Run `npm run verify:care` against the local app for isolated persistence, role/facility, correction, task, concurrent-call and webhook integration checks. It cleans up only its own fixtures. `npm run verify:disaster` continues to verify the original replay (set `DISASTER_DEMO_APP_URL=http://127.0.0.1:3017`).
+
 ## Quick start
 
 With Node.js, Docker Desktop running, and dependencies installed:

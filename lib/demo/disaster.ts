@@ -66,7 +66,7 @@ async function state(sessionId: string, eventId: string) {
   if (error) throw new DemoError("Cannot read replay progress.", 500);
   const completed = (data ?? []).map((row) => row.raw?.step).filter((step): step is number => Number.isInteger(step));
   const step = completed.length ? Math.max(...completed) : -2;
-  return { sessionId, eventId, dailyEventId: own.daily, step, totalSteps: DISASTER_DEMO_LABELS.length,
+  return { sessionId, eventId, facilityId: own.eventRecord.facility_id??null, dailyEventId: own.daily, step, totalSteps: DISASTER_DEMO_LABELS.length,
     label: step < 0 ? "Prior care records and evacuation needs are ready" : DISASTER_DEMO_LABELS[step],
     done: step === DISASTER_DEMO_LABELS.length - 1, simulated: true as const, patientCount: 8,
     focusClientId: own.clients[step < 0 ? 0 : [0, 0, 2, 4, 4, 0][step]] };
@@ -148,15 +148,16 @@ function baselineCall(session: string, index: number): RetellCall {
   return call;
 }
 
-export async function startDisasterDemo(requestedSessionId: string = randomUUID()) {
+export async function startDisasterDemo(requestedSessionId: string = randomUUID(), facilityId?: "hollywood" | "pasadena" | "culver-city") {
   assertLocalDemo();
   const sessionId = requestedSessionId;
   const own = ids(sessionId);
   const db = supabaseAdmin();
   const alert = `${PREFIX} [${sessionId}] — Fictional wildfire welfare check in west Altadena. The agency is checking enrolled patients and identifying evacuation assistance needs. This is not a live emergency alert.`;
-  const { error: eventError } = await db.from("events").upsert({ id: own.event, request_id: sessionId, type: "crisis", alert_text: alert, dispatching: false }, { onConflict: "id", ignoreDuplicates: true });
+  const { error: eventError } = await db.from("events").upsert({ id: own.event, request_id: sessionId, type: "crisis", alert_text: alert, dispatching: false, ...(facilityId ? {facility_id:facilityId} : {}) }, { onConflict: "id", ignoreDuplicates: true });
   if (eventError) throw new DemoError("Cannot create the replay session.", 500);
-  await ownedSession(sessionId, own.event);
+  const scope=await ownedSession(sessionId, own.event);
+  if(facilityId && scope.eventRecord.facility_id!==facilityId)throw new DemoError("This replay belongs to another facility.",409);
   return locked(sessionId, async () => {
     const existing = await state(sessionId, own.event);
     if (existing.step >= -1) return existing;
@@ -166,7 +167,13 @@ export async function startDisasterDemo(requestedSessionId: string = randomUUID(
       emergency_contact_name: `Fictional replay contact [${sessionId}]`, language: "en", last_daily_at: priorAt,
     })), { onConflict: "id", ignoreDuplicates: true });
     if (clientError) throw new DemoError("Cannot create the eight fictional replay patients.", 500);
-    const { error: priorError } = await db.from("events").upsert({ id: own.daily, type: "daily", started_at: priorAt, alert_text: `${PREFIX} [${sessionId}] — prior daily care record` }, { onConflict: "id", ignoreDuplicates: true });
+    if(facilityId){
+      const nurseId={hollywood:'demo-nurse',pasadena:'demo-nurse-pasadena','culver-city':'demo-nurse-culver'}[facilityId];
+      const aideId='demo-aide-'+(facilityId==='culver-city'?'culver':facilityId);
+      const {error}=await db.from('care_profiles').update({facility_id:facilityId,nurse_id:nurseId,aide_id:aideId}).in('client_id',own.clients);
+      if(error)throw new DemoError('Cannot scope the fictional replay to this facility.',500);
+    }
+    const { error: priorError } = await db.from("events").upsert({ id: own.daily, type: "daily", started_at: priorAt, ...(facilityId ? {facility_id:facilityId} : {}), alert_text: `${PREFIX} [${sessionId}] — prior daily care record` }, { onConflict: "id", ignoreDuplicates: true });
     if (priorError) throw new DemoError("Cannot save prior care context.", 500);
     const { error: checksError } = await db.from("checks").upsert(PEOPLE.flatMap((_, index) => [
       { id: own.checks[index], event_id: own.event, client_id: own.clients[index], status: "queued", ladder_step: 0, next_action_at: null, summary: "SIMULATED: Waiting for the agency's crisis check-in." },

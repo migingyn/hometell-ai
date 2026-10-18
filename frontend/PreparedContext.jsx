@@ -1,0 +1,7 @@
+'use client';
+import {time,words} from './ui';
+export default function PreparedContext({context,snapshot=false}){
+ if(!context)return <p className="empty">No prepared context has been saved for this call.</p>;
+ return <section className="panel"><div className="section-heading"><h2>{snapshot?'Context when this call began':'Context for the next call'}</h2><span className="badge">{snapshot?'Historical snapshot':'Current care records'}</span></div><p className="muted">{snapshot?'Saved at '+time(context.prepared_at)+'. Later measurements do not change this record.':'New measurements and approved reminders are captured when the next call is requested.'}</p>
+ <div className="facts">{Object.entries(context.raw_measurements).map(([key,r])=><div key={key}><dt>{words(key)}</dt><dd><strong>{r.value} {r.unit}</strong><br/>Measured {time(r.measured_at)}<br/>Entered {time(r.entered_at)}<br/>{r.source} · {r.author.name}<br/>{r.freshness}</dd></div>)}</div><p className="muted">Missing measurements: {context.missing_fields.map(words).join(', ')||'None'}</p><p className="muted">Outdated or future readings: {context.outdated_fields.map(words).join(', ')||'None'}</p><h3>Staff-approved reminders</h3><p className="preserve">{context.staff_approved_instructions}</p><h3>Outstanding follow-ups</h3>{context.outstanding_follow_ups.length?context.outstanding_follow_ups.map(a=><p key={a.id}>{a.reason}</p>):<p className="muted">None recorded.</p>}</section>;
+}
