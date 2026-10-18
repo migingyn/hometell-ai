@@ -1,5 +1,7 @@
 # PRD. Heartbeat
 
+> **Update 2026-10-17.** Scope changed to daily resident check-ins plus crisis mode, with no no-pickup ladder. The backend contract is `API.md` and the design is in `README.md`. The ladder, risk tiers, and `checks` table below are out of date.
+
 ## Context for coding agents
 
 You are building a 24 hour hackathon MVP. Optimize for a working live demo, not production quality. Do not add features outside this document. Do not add auth, settings pages, or tests unless asked. Prefer simple code over clever code. When unsure, pick the option that is fastest to demo.

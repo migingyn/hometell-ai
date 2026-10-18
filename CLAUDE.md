@@ -1,8 +1,8 @@
 # Heartbeat
 
-AI phone desk for home care agencies. A coordinator clicks one button. Heartbeat calls every senior client through Retell AI, highest risk first. Clients who answer and sound fine turn green. Clients who report danger go to a human. Clients who do not answer climb a no-pickup ladder.
+AI phone desk for a private home care center. The AI calls each resident daily, asks nurse check-in questions, reminds them about meds exactly as the nurse wrote it, and alerts the front desk when something is wrong. In a disaster it calls every resident, highest vitals risk first, and flags anyone who needs help or does not respond.
 
-This is a 24 hour hackathon MVP. Read `PRD.md` before any feature work. If a request is not in the PRD, say so and ask before building it.
+This is a 24 hour hackathon MVP. `API.md` is the contract the frontend builds against, and `README.md` covers how it works. The no-pickup ladder in `PRD.md` was dropped. If a request is not covered by these, say so and ask before building it.
 
 ## Priorities, in order
 
@@ -24,8 +24,10 @@ This is a 24 hour hackathon MVP. Read `PRD.md` before any feature work. If a req
 - `npm run dev` starts the app on localhost:3000
 - `npm run lint` runs ESLint
 - `npx tsc --noEmit` type checks
-- `npx tsx scripts/seed.ts` seeds 10 clients
-- `npx tsx scripts/fake-webhook.ts <checkId> <ok|needs_human|no_answer>` fakes a Retell result
+- `npx tsx scripts/seed.ts` seeds 5 residents
+- `POST /api/mock-webhook { client_id, scenario }` fakes a Retell call (see README)
+- `npx tsx scripts/check-setup.ts` read-only check of every key and the Retell agent
+- `npx tsx scripts/setup-retell.ts [--apply] [--publish]` points the Retell agent at this server
 - `ngrok http 3000` exposes the webhook to Retell
 
 ## Folder map and owners
@@ -34,8 +36,8 @@ This is a 24 hour hackathon MVP. Read `PRD.md` before any feature work. If a req
 | --- | --- | --- |
 | `lib/types.ts` | Shared | The contract. Do not change without telling the team |
 | `supabase/schema.sql` | Shared | Do not change without telling the team |
-| `lib/retell.ts`, `app/api/retell/*` | Mikey | Retell calls and webhook |
-| `lib/ladder.ts`, `lib/classifier/*`, `lib/sms.ts`, `app/api/ladder/*` | Fullstack | Ladder and classification |
+| `lib/retell.ts`, `lib/webhook.ts`, `app/retell-webhook/*`, `app/retell/*` | Mikey | Retell calls, webhook, custom functions |
+| `lib/status.ts`, `lib/vitals.ts`, `lib/alerts.ts`, `lib/crisis.ts`, `lib/watchdog.ts`, `lib/classifier/*`, `lib/sms.ts`, `app/api/*` | Fullstack | Status, alerts, crisis, API routes |
 | `app/page.tsx`, `components/*` | Frontend | Dashboard |
 | `scripts/*`, `docs/*` | Pitch | Seed data and demo script |
 
@@ -43,9 +45,9 @@ Stay inside your own files unless the task needs a shared change. If it does, st
 
 ## Rules for code
 
-- Import types from `lib/types.ts`. Never redefine `Check`, `Client`, or `CheckStatus` locally
+- Import types from `lib/types.ts`. Never redefine `Client`, `Call`, or `Alert` locally
 - Server code uses the Supabase service role client from `lib/supabase.ts`. Never import the service role key into a client component
-- Every API route validates input with zod and returns `{ ok: true, data }` or `{ ok: false, error }`
+- Every API route validates input with zod and returns the shape in `API.md`. Errors are `{ error }` with a status code
 - Webhook handlers must be idempotent. Retell can send the same event twice
 - Keep `MOCK_RETELL=true` working at all times. If real code breaks, mock mode must still run the demo
 - No new dependencies without a one-line reason in the commit message
@@ -54,16 +56,17 @@ Stay inside your own files unless the task needs a shared change. If it does, st
 
 ## Safety rules that code must enforce
 
-- Hard danger words (chest pain, can't breathe, fell, fall, dizzy, confused, help, emergency) always set `needs_human`. No classifier can downgrade them
+- Hard danger words (chest pain, can't breathe, fell, fall, dizzy, confused, help, emergency) in the resident's words always raise a `danger` alert. No classifier can downgrade them
 - Voicemail always counts as no answer
 - The AI script never tells a client they are safe
-- A missed call never becomes `ok` without a human or emergency contact confirming
+- A crisis call that fails, never starts, goes unanswered, or ends unclear always raises an urgent crisis alert
+- All status and alert decisions are plain if-statements. No AI logic in the backend
 
 ## Demo settings
 
-- `DEMO_TIME_SCALE=0.05` turns 5 minute ladder steps into about 15 seconds
-- The Advance button on each card runs the next ladder step instantly
-- Seed data uses teammates' real phone numbers
+- `OPEN_LINE_MINUTES=1` shows open-line alerts fast
+- `POST /api/mock-crisis` plays a full crisis across all residents
+- Seed data uses teammates' real phone numbers from `SEED_PHONES`
 
 ## Git
 

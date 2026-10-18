@@ -1,123 +1,151 @@
 // The shared contract. Do not change without telling the team.
-// Mirrors supabase/schema.sql.
+// Mirrors supabase/schema.sql and API.md.
+import type Retell from "retell-sdk";
 
-export type RiskTier = "red" | "yellow" | "green";
+export type CallType = "daily" | "crisis";
 
-export type CheckStatus =
-  | "queued"
-  | "calling"
-  | "ok"
-  | "needs_human"
+export const CRISIS_TYPES = ["heat_wave", "power_outage", "wildfire", "earthquake", "flood"] as const;
+export type CrisisType = (typeof CRISIS_TYPES)[number];
+
+export type VitalsStatus = "normal" | "watch" | "alert";
+export type CardStatus = "red" | "yellow" | "green" | "gray";
+export type CrisisState = "safe" | "needs_help" | "no_response" | "calling" | "not_reached";
+
+export type Urgency = "now" | "today";
+export type AlertType =
+  | "needs_nurse"
+  | "danger"
+  | "open_line"
   | "no_answer"
-  | "handled";
+  | "allergy"
+  | "dose_question"
+  | "missed_med"
+  | "flag_nurse"
+  | "pain"
+  | "crisis_needs_help"
+  | "crisis_no_response"
+  | "wellness";
 
-export type CallTarget = "client" | "emergency_contact";
-
-// 0 = first call placed. 1 retry client, 2 SMS client, 3 call emergency contact, 4 flag unreachable.
-export type LadderStep = 0 | 1 | 2 | 3 | 4;
+export type VitalName = "bp_sys" | "bp_dia" | "heart_rate" | "temp_f" | "spo2";
+// Set by the nurse per resident. A missing vital is not checked.
+export type VitalsRanges = Partial<Record<VitalName, { min: number; max: number }>>;
 
 export type Client = {
-  id: string;
+  id: number;
   name: string;
+  preferred_name: string;
+  room: string;
   phone: string;
-  risk_tier: RiskTier;
-  lives_alone: boolean;
-  uses_powered_equipment: boolean;
-  emergency_contact_name: string;
-  emergency_contact_phone: string;
-  usual_pickup_time: string | null;
+  aide_name: string;
+  nurse_name: string;
+  allergies: string | null;
+  personal_note: string | null;
+  vitals_ranges: VitalsRanges;
+  created_at: string;
 };
 
-export type HeartbeatEvent = {
-  id: string;
-  type: string;
-  started_at: string;
+export type DailyEntry = {
+  id: number;
+  client_id: number;
+  date: string; // YYYY-MM-DD
+  bp_sys: number | null;
+  bp_dia: number | null;
+  heart_rate: number | null;
+  temp_f: number | null;
+  spo2: number | null;
+  vitals_watch_note: string | null;
+  med_schedule_now: string | null; // Exactly as the nurse wrote it
+  entered_by: string | null;
+  created_at: string;
 };
 
-export type Check = {
-  id: string;
-  event_id: string;
-  client_id: string;
-  status: CheckStatus;
-  ladder_step: LadderStep;
-  next_action_at: string | null;
-  last_call_id: string | null;
+// Post-call extraction fields from the Retell agent. Every one may be null.
+export type CallAnalysis = {
+  feels_ok: "yes" | "no" | "unsure" | null;
+  danger_words_heard: boolean | null;
+  med_taken: "yes" | "no" | "unsure" | "not_asked" | null;
+  allergy_item_mentioned: boolean | null;
+  dose_question_asked: boolean | null;
+  needs_nurse: boolean | null;
+  needs_nurse_reason: string | null;
+  new_personal_fact: string | null;
+  answered_by: "client" | "someone_else" | "voicemail" | "no_answer" | null;
+  pain_level: number | null;
+  pain_location: string | null;
+  sleep_quality: "good" | "poor" | "not_asked" | null;
+  ate_and_drank: "yes" | "no" | "not_asked" | null;
+  steady_on_feet: "yes" | "no" | "not_asked" | null;
+  mood: "good" | "okay" | "low" | "not_asked" | null;
+  new_swelling: boolean | null;
+  crisis_status: "needs_help" | "no_response" | "safe" | "not_crisis" | null;
+};
+
+export type CallStatus = "registered" | "ongoing" | "ended" | "analyzed";
+
+export type Call = CallAnalysis & {
+  call_id: string;
+  client_id: number;
+  call_type: CallType;
+  crisis_type: CrisisType | null;
+  crisis_run_id: number | null;
+  status: CallStatus;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_sec: number | null;
+  disconnection_reason: string | null;
   summary: string | null;
-  flag_reason: string | null;
-  handled_at: string | null;
+  sentiment: string | null;
+  call_successful: boolean | null;
+  transcript: string | null;
+  raw_json: unknown;
+  created_at: string;
   updated_at: string;
 };
 
-export type CheckWithClient = Check & { client: Client };
-
-// Fields a ladder or webhook step is allowed to change on a check.
-export type CheckPatch = Partial<
-  Pick<
-    Check,
-    | "status"
-    | "ladder_step"
-    | "next_action_at"
-    | "last_call_id"
-    | "summary"
-    | "flag_reason"
-    | "handled_at"
-  >
->;
-
-export type CallLog = {
-  id: string;
-  check_id: string;
-  retell_call_id: string;
-  target: CallTarget;
-  outcome: string;
-  transcript: string | null;
-  raw: unknown;
+export type Alert = {
+  id: number;
+  client_id: number;
+  call_id: string | null;
+  type: AlertType;
+  urgency: Urgency;
+  message: string;
+  quote: string | null;
   created_at: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+};
+
+export type CrisisRun = {
+  id: number;
+  crisis_type: CrisisType;
+  started_at: string;
+  ended_at: string | null;
 };
 
 // What we send as Retell call metadata. Retell echoes it back on every webhook.
 export type CallMetadata = {
-  check_id: string;
-  target: CallTarget;
-  // Only read when MOCK_RETELL=true. Lets scripts/fake-webhook.ts force an outcome.
-  mock_outcome?: ClassifierStatus;
+  client_id: number;
+  call_type: CallType;
+  crisis_type: CrisisType | null;
+  crisis_run_id: number | null;
 };
 
-// The subset of the Retell webhook call object we read.
-// TODO(Mikey): confirm field names against Retell docs.
-export type RetellCall = {
+// Retell's own call type from retell-sdk. Every field optional except call_id,
+// because webhooks and our mock replays only send part of it.
+type SdkCall = Retell.PhoneCallResponse;
+export type DisconnectionReason = NonNullable<SdkCall["disconnection_reason"]>;
+export type RetellCallStatus = SdkCall["call_status"];
+
+export type RetellCall = Partial<Omit<SdkCall, "call_id" | "metadata" | "call_analysis">> & {
   call_id: string;
-  call_status?: string;
-  disconnection_reason?: string;
-  transcript?: string;
-  metadata?: CallMetadata;
-  call_analysis?: {
-    call_summary?: string;
-    in_voicemail?: boolean;
-    user_sentiment?: string;
-    call_successful?: boolean;
+  metadata?: Partial<CallMetadata>;
+  call_analysis?: Partial<Omit<NonNullable<SdkCall["call_analysis"]>, "custom_analysis_data">> & {
     custom_analysis_data?: Record<string, unknown>;
   };
 };
 
-export type RetellWebhookEvent = "call_started" | "call_ended" | "call_analyzed";
-
+// Retell webhook body. We act on call_started, call_ended, and call_analyzed.
 export type RetellWebhookPayload = {
-  event: RetellWebhookEvent;
+  event: "call_started" | "call_ended" | "call_analyzed" | (string & {});
   call: RetellCall;
 };
-
-export type ClassifierStatus = "ok" | "needs_human" | "no_answer";
-
-export type ClassifierResult = {
-  status: ClassifierStatus;
-  summary: string;
-  flag_reason: string | null;
-};
-
-export interface Classifier {
-  name: string;
-  classify(call: RetellCall): Promise<ClassifierResult>;
-}
-
-export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
