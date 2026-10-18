@@ -1,5 +1,6 @@
 // Receives Retell call events. Idempotent: a repeated call_id is ignored.
 import { z } from "zod";
+import { after } from "next/server";
 import { fail, ok } from "@/lib/api";
 import { getCheckWithClient, getCheckEvent } from "@/lib/checks";
 import { classifyCall } from "@/lib/classifier";
@@ -8,7 +9,25 @@ import { verifyWebhook } from "@/lib/retell";
 import { alertCoordinator } from "@/lib/sms";
 import { supabaseAdmin } from "@/lib/supabase";
 import { normalizeMode } from "@/lib/mode";
+import { assessCallerPriority } from "@/lib/classifier/priority";
+import { processCallAcoustics } from "@/lib/acoustic/process";
+import { buildPostOpAssessment } from "@/lib/postop/assessment";
+import { previousPostOpAssessment } from "@/lib/postop/store";
+import { isNurseTransferEvent } from "@/lib/postop/transfer";
+import { reportedRideNeed } from "@/lib/postop/ride";
 import type { Check, RetellCall } from "@/lib/types";
+import { interceptRehearsalWebhook, RehearsalError } from "@/lib/demo/rehearsal";
+
+export const maxDuration = 180;
+
+function scheduleAcoustics(checkId: string, call: RetellCall) {
+  if (!process.env.ACOUSTIC_SERVICE_URL?.trim() || process.env.MOCK_RETELL === "true" || !call.metadata) return;
+  const target = call.metadata.target;
+  after(async () => {
+    try { await processCallAcoustics(checkId, call.call_id, target, call); }
+    catch { console.warn("Post-call acoustic assessment could not be saved; retry the signed call-analyzed event."); }
+  });
+}
 
 const Payload = z.object({
   event: z.string(),
@@ -29,6 +48,11 @@ const Payload = z.object({
 
 export async function POST(req: Request) {
   const raw = await req.text();
+  try {
+    if (await interceptRehearsalWebhook(raw, req.headers.get("x-retell-signature"))) return ok({ rehearsal: true });
+  } catch (error) {
+    return fail(error instanceof RehearsalError ? error.message : "Cannot save rehearsal callback.", error instanceof RehearsalError ? error.status : 500);
+  }
   if (!(await verifyWebhook(raw, req.headers.get("x-retell-signature")))) {
     return fail("Bad signature", 401);
   }
@@ -81,13 +105,24 @@ export async function POST(req: Request) {
   const parsed = Payload.safeParse(json);
   if (!parsed.success) return fail(z.prettifyError(parsed.error));
 
-  if (parsed.data.event !== "call_analyzed") return ok({ ignored: parsed.data.event });
+  const live = parsed.data.event === "transcript_updated";
+  const transfer = isNurseTransferEvent(parsed.data.event);
+  if (!live && !transfer && parsed.data.event !== "call_analyzed") return ok({ ignored: parsed.data.event });
 
   const call = parsed.data.call as RetellCall;
-  const meta = call.metadata;
-  if (!meta) return fail("Call has no metadata.check_id");
+  let meta = call.metadata;
 
   try {
+    // Transfer callbacks can contain only call_id. The signed provider event
+    // can resolve only a currently assigned check, never an arbitrary patient.
+    if (transfer && !meta) {
+      const { data, error } = await supabaseAdmin().from("checks").select("id,ladder_step")
+        .eq("last_call_id", call.call_id).maybeSingle();
+      if (error) return fail("Cannot locate nurse transfer call", 500);
+      if (!data) return ok({ skipped: "unknown_transfer_call" });
+      meta = { check_id: data.id, target: data.ladder_step === 3 ? "emergency_contact" : "client" };
+    }
+    if (!meta) return fail("Call has no metadata.check_id");
     const check = await getCheckWithClient(meta.check_id);
     if (!check) return fail("Unknown check", 404);
 
@@ -99,23 +134,68 @@ export async function POST(req: Request) {
     }
     const event = await getCheckEvent(check);
     const mode = normalizeMode(event.type);
-    const result = await classifyCall(call, { mode, target: meta.target, contactName: check.client.emergency_contact_name });
-    const patch = applyCallResult(check, result, meta.target, call.call_id);
+    if (transfer) {
+      if (meta.target !== (check.ladder_step === 3 ? "emergency_contact" : "client")) return ok({ skipped: "wrong_target" });
+      const db = supabaseAdmin();
+      const { data: applied, error } = await db.rpc("apply_heartbeat_transfer", {
+        p_check_id: check.id, p_call_id: call.call_id, p_event: parsed.data.event,
+      });
+      if (error) return fail("Cannot save nurse transfer. Apply the post-operative migration.", 500);
+      if (applied?.applied && ["failed", "ended_unconfirmed"].includes(applied.check?.nurse_transfer?.status)) {
+        const sms = await alertCoordinator(check.client, applied.check.flag_reason ?? "Nurse transfer was not confirmed; patient follow-up remains open.");
+        await db.from("checks").update({ sms_status: sms.note }).eq("id", check.id).eq("last_call_id", call.call_id).neq("status", "handled");
+      }
+      return ok(applied ?? { skipped: "not_applied" });
+    }
+    if (live) {
+      const assessment = assessCallerPriority(call, { mode, target: meta.target, contactName: check.client.emergency_contact_name }, "live");
+      const turns = call.transcript_object ?? call.transcript_with_tool_calls;
+      const turnCount = Array.isArray(turns) ? turns.length : (call.transcript?.split(/\r?\n/).length ?? 0);
+      const db = supabaseAdmin();
+      const { data: applied, error } = await db.rpc("apply_heartbeat_priority", {
+        p_check_id: check.id, p_call_id: call.call_id, p_target: meta.target,
+        p_assessment: assessment, p_turn_count: turnCount,
+      });
+      if (error) return fail("Cannot save live caller priority; apply the caller-priority migration", 500);
+      if (applied?.newly_escalated) {
+        const sms = await alertCoordinator(check.client, assessment.reasons.join(" "));
+        await db.from("checks").update({ sms_status: sms.note }).eq("id", check.id).eq("last_call_id", call.call_id).neq("status", "handled");
+      }
+      return ok(applied ?? { skipped: "not_applied" });
+    }
+    let result = await classifyCall(call, { mode, target: meta.target, contactName: check.client.emergency_contact_name });
+    const postop = mode === "daily" && meta.target === "client" && result.status !== "no_answer"
+      ? buildPostOpAssessment(call, { mode, target: meta.target, patientName: check.client.name }, await previousPostOpAssessment(check.client_id, event.started_at))
+      : null;
+    if (postop && result.status === "ok") result = {
+      ...result, status: "needs_human", urgency: "follow_up", flag_reason: "Post-operative check-in awaits nurse review.",
+    };
+    let patch = applyCallResult(check, result, meta.target, call.call_id);
+    // Existing danger alerts still protect the outcome while allowing the
+    // patient evidence to be saved for the nurse in the same atomic write.
+    if (postop && !Object.keys(patch).length) patch = {
+      status: check.status, urgency: check.urgency, flag_reason: check.flag_reason,
+      summary: result.summary, next_action_at: null,
+    };
     if (!Object.keys(patch).length) return ok({ skipped: "protected_result" });
     const db = supabaseAdmin();
     const { data: applied, error: applyError } = await db.rpc("apply_heartbeat_result", {
       p_check_id: check.id, p_call_id: call.call_id, p_target: meta.target,
-      p_result: { ...result, ...patch }, p_transcript: call.transcript ?? null,
+      p_result: { ...result, ...patch, ...(postop ? { postop_assessment: postop } : {}) }, p_transcript: call.transcript ?? null,
       p_raw: json, p_next_action_at: patch.next_action_at ?? null,
     });
     if (applyError) return fail(applyError.message, 500);
-    if (!applied?.applied) return ok(applied ?? { skipped: "not_applied" });
+    if (!applied?.applied) {
+      if (applied?.duplicate) scheduleAcoustics(check.id, call);
+      return ok(applied ?? { skipped: "not_applied" });
+    }
+    scheduleAcoustics(check.id, call);
     const updated = applied.check as Check;
 
     // Daily requests are follow-ups. Only hard-rule danger hits text immediately;
     // all crisis help reports and terminal unreachable checks notify a person.
     if (updated.status === "needs_human" && (applied.prior_status !== "needs_human" || check.urgency !== "urgent") &&
-      (mode === "crisis" || result.urgency === "urgent")) {
+      (mode === "crisis" || updated.urgency === "urgent")) {
       const sms = await alertCoordinator(check.client, updated.flag_reason ?? updated.summary ?? "");
       updated.sms_status = sms.note;
       const { error: smsError } = await db.from("checks").update({ sms_status: sms.note })
@@ -123,12 +203,12 @@ export async function POST(req: Request) {
       if (smsError) return fail("Call result saved, but SMS status could not be saved", 500);
     }
 
-    // P1: use an explicit boolean from a daily client answer; a missing field
-    // never clears an existing ride need, and contacts cannot overwrite it.
+    // Daily planning requires a verified patient identity. Model-issued status
+    // and ride fields from an unconfirmed speaker cannot complete a check-in.
     const clientStatus = call.call_analysis?.custom_analysis_data?.client_status;
-    if (mode === "daily" && meta.target === "client" && result.status !== "no_answer" &&
+    if (mode === "daily" && meta.target === "client" && postop?.patient_confirmed === true && result.status !== "no_answer" &&
       (clientStatus === "ok" || clientStatus === "needs_help")) {
-      const needsRide = call.call_analysis?.custom_analysis_data?.needs_ride;
+      const needsRide = reportedRideNeed(call);
       const { error: clientError } = await db.from("clients").update({
         last_daily_at: new Date().toISOString(),
         ...(typeof needsRide === "boolean" ? { needs_ride: needsRide } : {}),

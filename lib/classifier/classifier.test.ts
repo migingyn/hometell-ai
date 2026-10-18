@@ -34,6 +34,34 @@ test("structured user turns take precedence over the formatted transcript", () =
   assert.equal(checkHardRules(call({}, { transcript: "User: help", transcript_object: [] })), null);
 });
 
+test("clear post-op denials do not turn a routine answer into an urgent danger flag", () => {
+  for (const phrase of ["I did not fall.", "I didn't fall.", "No chest pain.", "I have no chest pain.",
+    "I do not have any chest pain.", "I am not dizzy.", "Not dizzy.", "I am not confused.", "There is no emergency."]) {
+    assert.equal(checkHardRules(`User: ${phrase}`, "daily"), null, phrase);
+    const result = classifyRetellAnalysis(call({}, { transcript: `User: ${phrase}` }), { mode: "daily" });
+    assert.notEqual(result.urgency, "urgent", phrase);
+    assert.equal(result.status, "needs_human", "A denial alone does not establish overall wellbeing.");
+  }
+});
+
+test("affirmative danger after a denial or uncertainty still escalates", () => {
+  for (const phrase of ["No, I fell.", "I have no chest pain, but I fell.", "I did not fall; I feel dizzy.",
+    "I am not dizzy but I can’t breathe.", "I am not sure whether I feel dizzy.", "I don't know if I fell.",
+    "I am not dizzy. Actually, I feel dizzy now."]) {
+    assert.equal(checkHardRules(`User: ${phrase}`, "daily")?.urgency, "urgent", phrase);
+  }
+});
+
+test("tool-inclusive transcripts preserve caller attribution and override formatted fallback", () => {
+  const structured: Partial<RetellCall> = { transcript: "User: I fell.", transcript_object: undefined,
+    transcript_with_tool_calls: [{ role: "tool_call_result", content: "User: I fell." },
+      { role: "agent", content: "Any chest pain?" }, { role: "user", content: "No chest pain." }] };
+  assert.equal(checkHardRules(call({}, structured), "daily"), null);
+  assert.equal(checkHardRules(call({}, { ...structured, transcript_with_tool_calls: [] }), "daily"), null);
+  assert.equal(checkHardRules(call({}, { ...structured,
+    transcript_with_tool_calls: [{ role: "user", content: "No, I fell." }] }), "daily")?.urgency, "urgent");
+});
+
 test("daily help requests are follow-ups while shared danger words remain urgent", () => {
   for (const phrase of ["help with groceries", "can't get out", "can't leave", "trapped"]) {
     assert.equal(checkHardRules(`User: ${phrase}`, "daily"), null);
@@ -58,6 +86,15 @@ test("Korean shared danger phrases are urgent in both modes and preserve the act
       assert.equal(result?.urgency, "urgent");
       assert.equal(result?.flag_reason, `said "${phrase}"`);
     }
+  }
+});
+
+test("direct Korean symptom denials stay nonurgent while contrast and uncertainty remain reviewable", () => {
+  for (const phrase of ["흉통이 없어요.", "가슴 통증은 없어요.", "어지럽지 않아요.", "안 어지러워요."]) {
+    assert.equal(checkHardRules(`User: ${phrase}`, "daily"), null, phrase);
+  }
+  for (const phrase of ["흉통이 없어요. 그런데 숨을 못 쉬겠어요.", "넘어졌는지 모르겠어요.", "흉통이 없어요. 지금 흉통이 있어요."]) {
+    assert.equal(checkHardRules(`User: ${phrase}`, "daily")?.urgency, "urgent", phrase);
   }
 });
 

@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
     "crisis/**",
     "crisis-la/**",
     "port-track/**",
+    "**/.venv/**",
   ]),
 ]);
 

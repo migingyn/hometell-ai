@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { config } from "./config";
-import { createPhoneCall, getPhoneCall, placeCall, verifyWebhook } from "./retell";
+import { createPhoneCall, getHeartbeatCallingReadiness, getPhoneCall, placeCall, verifyWebhook } from "./retell";
 import { buildLlmUpdate, configureVoiceAgent, validatePublicUrl } from "../scripts/configure-voice-agent";
 import { buildSeedClients } from "../scripts/seed";
 import { buildFakeWebhook } from "../scripts/fake-webhook";
 import { configureHeartbeatAgents, heartbeatAgentPlan, renderHeartbeatAgentDocs, HEARTBEAT_PROMPTS } from "../scripts/configure-heartbeat-agents";
 import type { Client } from "./types";
+import { POSTOP_ANALYSIS_FIELDS } from "./postop/analysis-schema";
+import { buildPostOpAssessment } from "./postop/assessment";
+import { POST as startHeartbeatEvent } from "../app/api/events/start/route";
 
-const envKeys = ["RETELL_API_KEY", "RETELL_FROM_NUMBER", "RETELL_AGENT_ID", "VOICE_PUBLIC_URL", "HEARTBEAT_PUBLIC_URL", "APP_URL", "RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID"] as const;
+const envKeys = ["RETELL_API_KEY", "RETELL_FROM_NUMBER", "RETELL_AGENT_ID", "VOICE_PUBLIC_URL", "HEARTBEAT_PUBLIC_URL", "APP_URL", "RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID", "ON_CALL_NURSE_PHONE"] as const;
 const priorEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
 const priorMock = config.mockRetell;
 
@@ -20,6 +23,7 @@ beforeEach(() => {
   process.env.RETELL_AGENT_ID = "agent_test";
   process.env.VOICE_PUBLIC_URL = "https://voice.example.com";
   delete process.env.HEARTBEAT_PUBLIC_URL;
+  delete process.env.ON_CALL_NURSE_PHONE;
   for (const key of ["RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID"]) delete process.env[key];
 });
 
@@ -261,7 +265,7 @@ test("check-in mode chooses dedicated agents and sends the exact official alert 
   assert.deepEqual(bodies[0].metadata, { check_id: "check_test", target: "client", mode: "daily" });
 });
 
-test("missing crisis alert blocks dialing and language agents fall back to the English mode then generic agent", async () => {
+test("missing crisis alert blocks dialing and language agents fall back only to the dedicated English mode", async () => {
   const bodies: Record<string, unknown>[] = [];
   const request = mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -270,12 +274,43 @@ test("missing crisis alert blocks dialing and language agents fall back to the E
   await assert.rejects(placeCall({ client: testClient, checkId: "check_test", target: "client" }), /official alert/);
   assert.equal(request.mock.callCount(), 0);
   const input = { client: { ...testClient, language: "ko" }, checkId: "check_test", target: "client" as const, event: { id: "event_test", type: "daily", alert_text: null, started_at: "2026-10-17T20:00:00Z" } };
-  await placeCall(input);
+  await assert.rejects(placeCall(input), /RETELL_DAILY_AGENT_ID/);
+  assert.equal(request.mock.callCount(), 0);
   process.env.RETELL_DAILY_AGENT_ID = "agent_daily";
   await placeCall(input);
   process.env.RETELL_DAILY_KO_AGENT_ID = "agent_daily_ko";
   await placeCall(input);
-  assert.deepEqual(bodies.map((body) => body.override_agent_id), ["agent_test", "agent_daily", "agent_daily_ko"]);
+  assert.deepEqual(bodies.map((body) => body.override_agent_id), ["agent_daily", "agent_daily_ko"]);
+});
+
+test("Heartbeat readiness and event start reject generic-only configuration before any network or database action", async () => {
+  const request = mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected network call"); });
+  const readiness = getHeartbeatCallingReadiness();
+  assert.equal(readiness.configured, false);
+  assert.deepEqual(readiness.missing, ["RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID"]);
+  const response = await startHeartbeatEvent(new Request("https://heartbeat.example.com/api/events/start", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "daily" }),
+  }));
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /dedicated agent/);
+  assert.equal(request.mock.callCount(), 0);
+  process.env.RETELL_DAILY_AGENT_ID = "private_daily_agent";
+  assert.equal(getHeartbeatCallingReadiness("daily").configured, true);
+  assert.equal(getHeartbeatCallingReadiness("crisis").configured, false);
+  assert.ok(!JSON.stringify(getHeartbeatCallingReadiness()).includes("private_daily_agent"));
+});
+
+test("live Heartbeat cannot reuse a generic or another mode agent under a dedicated setting", async () => {
+  const request = mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected network call"); });
+  const input = { client: testClient, checkId: "check_test", target: "client" as const, event: { id: "event_test", type: "daily", alert_text: null, started_at: "2026-10-17T20:00:00Z" } };
+  process.env.RETELL_DAILY_AGENT_ID = process.env.RETELL_AGENT_ID;
+  await assert.rejects(placeCall(input), /separate dedicated/);
+  assert.equal(getHeartbeatCallingReadiness("daily").configured, false);
+  process.env.RETELL_DAILY_AGENT_ID = "agent_shared";
+  process.env.RETELL_CRISIS_AGENT_ID = "agent_shared";
+  await assert.rejects(placeCall(input), /separate dedicated/);
+  assert.equal(getHeartbeatCallingReadiness().invalid.length, 2);
+  assert.equal(request.mock.callCount(), 0);
 });
 
 test("private teammate seed requires consent and preserves fictional display identities", () => {
@@ -311,13 +346,46 @@ test("simulated webhook uses the current call ID, user turns, and real contact c
   assert.deepEqual(missed.call.transcript_object, []);
 });
 
-test("daily and crisis agent plans exclude custom research tools and enforce 90-second calls", () => {
+test("daily simulated answers contain identified patient evidence for every post-op field", () => {
+  const check = { id: "check_test", last_call_id: "mock_daily", client: { name: "Margaret Ellis", emergency_contact_name: "Dana Ellis" } };
+  for (const outcome of ["ok", "follow_up", "needs_ride"] as const) {
+    const payload = buildFakeWebhook(check, outcome, "client", "daily");
+    const assessment = buildPostOpAssessment(payload.call, { mode: "daily", target: "client", patientName: "Margaret Ellis" })!;
+    assert.equal(assessment.patient_confirmed, true);
+    assert.equal(assessment.answers.pain.value, 2);
+    assert.ok(Object.values(assessment.answers).every((answer) => answer.status === "reported" && !!answer.quote));
+    assert.equal(assessment.suggested_next_step.status, "proposed");
+    assert.match(payload.call.call_analysis?.call_summary ?? "", /^SIMULATED:/);
+  }
+  assert.equal(buildFakeWebhook(check, "ok", "client", "daily").call.call_analysis?.custom_analysis_data?.needs_ride_quote, "I am okay. I can leave on my own.");
+  assert.equal(buildFakeWebhook(check, "needs_ride", "client", "daily").call.call_analysis?.custom_analysis_data?.needs_ride_quote, "I need a ride to leave.");
+});
+
+test("interrupted and nonpatient simulated calls never manufacture questionnaire or mobility answers", () => {
+  const check = { id: "check_test", last_call_id: "mock_daily", client: { name: "Margaret Ellis", emergency_contact_name: "Dana Ellis" } };
+  for (const outcome of ["needs_human", "unclear"] as const) {
+    const payload = buildFakeWebhook(check, outcome, "client", "daily");
+    const assessment = buildPostOpAssessment(payload.call, { mode: "daily", target: "client", patientName: "Margaret Ellis" })!;
+    assert.ok(Object.values(assessment.answers).every((answer) => answer.status === "unknown"));
+    assert.equal(payload.call.call_analysis?.custom_analysis_data?.needs_ride_quote, "");
+  }
+  for (const [target, mode] of [["emergency_contact", "daily"], ["client", "crisis"]] as const) {
+    const payload = buildFakeWebhook(check, "ok", target, mode);
+    assert.equal(payload.call.call_analysis?.custom_analysis_data?.postop_patient_confirmed, undefined);
+  }
+});
+
+test("daily and crisis plans exclude custom research tools and allow their bounded scripts and handoff", () => {
   for (const mode of ["daily", "crisis"] as const) {
     const plan = heartbeatAgentPlan(mode, "en", "https://voice.example.com");
     assert.deepEqual(plan.llm.general_tools.map((tool) => tool.type), ["end_call"]);
-    assert.equal(plan.agent.max_call_duration_ms, 90_000);
+    assert.equal(plan.agent.max_call_duration_ms, mode === "daily" ? 360_000 : 180_000);
     assert.equal(plan.agent.webhook_url, "https://voice.example.com/api/retell/webhook");
-    assert.deepEqual(plan.agent.post_call_analysis_data.map((field) => field.name), ["client_status", "request", "needs_ride", "contact_confirms_ok"]);
+    assert.deepEqual(plan.agent.post_call_analysis_data.map((field) => field.name), ["client_status", "request", "needs_ride", "needs_ride_quote", "contact_confirms_ok", "situation_urgency", "situation_evidence_quote", "reported_distress", "distress_evidence_quote", ...(mode === "daily" ? POSTOP_ANALYSIS_FIELDS.map((field) => field.name) : [])]);
+    assert.ok(plan.agent.webhook_events.includes("transcript_updated"));
+    assert.ok(plan.agent.webhook_events.includes("call_analyzed"));
+    const distressField = plan.agent.post_call_analysis_data.find((field) => field.name === "reported_distress");
+    assert.match(distressField?.description ?? "", /not voice-tone/);
     assert.match(plan.llm.general_prompt, /automated/);
   }
   const crisis = heartbeatAgentPlan("crisis", "en", "https://voice.example.com");
@@ -378,13 +446,13 @@ test("Korean check-in prompts disclose automation, hand off urgent reports, and 
   for (const mode of ["daily", "crisis"] as const) {
     const plan = heartbeatAgentPlan(mode, "ko", "https://heartbeat.example.com");
     assert.equal(plan.agent.language, "ko-KR");
-    assert.equal(plan.agent.max_call_duration_ms, 90_000);
+    assert.equal(plan.agent.max_call_duration_ms, mode === "daily" ? 360_000 : 180_000);
     assert.match(plan.llm.general_prompt, /자동 안부 확인/);
     assert.match(plan.llm.general_prompt, /가슴이 아파요/);
     assert.match(plan.llm.general_prompt, /숨을 못 쉬겠어요/);
-    assert.match(plan.llm.general_prompt, /담당자가 곧 전화드리도록/);
+    assert.match(plan.llm.general_prompt, /연결/);
   }
-  assert.match(HEARTBEAT_PROMPTS.ko.daily, /장보기나 일반 이동 지원 요청만으로 긴급 상황이라고 단정하지/);
+  assert.match(HEARTBEAT_PROMPTS.ko.daily, /수술/);
   assert.match(HEARTBEAT_PROMPTS.ko.crisis, /ORIGINAL LANGUAGE/);
   assert.match(HEARTBEAT_PROMPTS.ko.crisis, /나갈 수 없어요/);
   assert.ok(HEARTBEAT_PROMPTS.ko.crisis.includes("{{alert_text}}"));

@@ -123,14 +123,18 @@ async function verifyDailyPlanning(): Promise<{ eventId: string; assertions: str
       .eq("id", check.id);
     if (queued.error) throw new Error("Could not prepare the next explicit mock daily answer.");
     const current = await readCheck(check.id);
-    await webhook(buildFakeWebhook(current, needsRide ? "needs_ride" : "ok", "client", "daily"));
+    const payload = buildFakeWebhook(current, needsRide ? "needs_ride" : "ok", "client", "daily");
+    assert.equal(payload.call.call_analysis?.custom_analysis_data?.postop_patient_confirmed, true);
+    assert.ok(payload.call.call_analysis?.custom_analysis_data?.postop_identity_quote);
+    assert.ok(payload.call.call_analysis?.custom_analysis_data?.needs_ride_quote);
+    await webhook(payload);
     const after = await readPlanning();
     assert.equal(after.needs_ride, needsRide, "A confirmed client mobility answer must persist its explicit boolean.");
     assert.ok(after.last_daily_at);
   };
   await confirmed(false);
   await confirmed(true);
-  const assertions = ["unclear client_status with needs_ride=false preserves existing true and last_daily_at", "confirmed client_status=ok persists false", "confirmed client_status=needs_help persists true", "Harold ends with needs_ride=true for crisis ride-priority verification"];
+  const assertions = ["unclear client_status with missing ride quote preserves existing true and last_daily_at", "identified patient's exact independent-mobility quote persists false", "identified patient's exact ride-need quote persists true", "Harold ends with needs_ride=true for crisis ride-priority verification"];
   await mkdir(resolve("output/heartbeat"), { recursive: true });
   await writeFile(resolve("output/heartbeat/daily-planning-verification.json"), JSON.stringify({
     completedAt: new Date().toISOString(), eventId: started.event.id, mode: "MOCK MODE", database: "actual Supabase persistence",
@@ -154,14 +158,21 @@ async function verifyMode(mode: EventMode, started: StartedEvent): Promise<ModeR
   const okayPayload = buildFakeWebhook(okay, "ok", "client", mode);
   await webhook(okayPayload);
   const okayState = await readCheck(okay.id);
-  assert.equal(okayState.status, "ok");
+  assert.equal(okayState.status, mode === "daily" ? "needs_human" : "ok");
+  if (mode === "daily") {
+    assert.equal(okayState.urgency, "follow_up");
+    assert.equal(okayState.postop_assessment?.patient_confirmed, true);
+    assert.equal(okayState.postop_assessment?.suggested_next_step.status, "proposed");
+    assert.ok(Object.values(okayState.postop_assessment!.answers).every((answer) => answer.status === "reported"));
+    assert.equal(okayState.sms_status, null, "A complete post-op record awaits nurse review without an urgent text.");
+  }
   assert.equal(okayState.next_action_at, null);
   const duplicate = await webhook(okayPayload);
   assert.equal(duplicate.duplicate, true, "A repeated analyzed call ID must be ignored.");
   const logCount = await supabaseAdmin().from("call_logs").select("id", { count: "exact", head: true }).eq("retell_call_id", okay.last_call_id!);
   if (logCount.error) throw new Error("Could not verify call-log idempotency.");
   assert.equal(logCount.count, 1);
-  report.assertions.push("client okay persisted", "duplicate call ID ignored and logged once");
+  report.assertions.push(mode === "daily" ? "complete post-op record persisted and awaits nurse review" : "client okay persisted", "duplicate call ID ignored and logged once");
   report.states.push(snapshot("okay", okayState));
 
   const dangerState = await fake(danger.id, "needs_human", mode);

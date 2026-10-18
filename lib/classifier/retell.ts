@@ -1,10 +1,11 @@
 import type { Classifier, ClassifierContext, ClassifierResult, RetellCall } from "@/lib/types";
 import { checkHardRules } from "./hardRules";
+import { withCallerPriority } from "./assessed";
 
 const MISSED_REASONS = ["voicemail_reached", "dial_no_answer", "dial_busy", "dial_failed"];
 
 /** Uses explicit post-call fields; a successful connection alone never establishes wellbeing. */
-export function classifyRetellAnalysis(call: RetellCall, context: ClassifierContext = { mode: "crisis" }): ClassifierResult {
+function classifyAnalysis(call: RetellCall, context: ClassifierContext): ClassifierResult {
   const hard = checkHardRules(call, context.mode);
   if (hard) return hard;
   const summary = call.call_analysis?.call_summary?.trim() || "No verified client update was recorded.";
@@ -28,6 +29,10 @@ export function classifyRetellAnalysis(call: RetellCall, context: ClassifierCont
       : "unclear call, needs review",
     urgency: context.mode === "daily" ? "follow_up" : "urgent",
   };
+}
+
+export function classifyRetellAnalysis(call: RetellCall, context: ClassifierContext = { mode: "crisis" }): ClassifierResult {
+  return withCallerPriority(classifyAnalysis(call, context), call, context);
 }
 
 export const retellClassifier: Classifier = {

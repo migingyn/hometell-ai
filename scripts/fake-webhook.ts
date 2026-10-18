@@ -12,10 +12,10 @@ export function buildFakeWebhook(check: Pick<Check, "id" | "last_call_id"> & { c
   const contact = check.client.emergency_contact_name;
   const person = check.client.name;
   const userText = outcome === "no_answer" ? "" : outcome === "ok"
-    ? target === "emergency_contact" ? `Yes, I spoke to ${person} today. They are okay and with me.` : "I feel fine, I took my morning medications, and I do not need anything. I have a way to leave."
+    ? target === "emergency_contact" ? `Yes, I spoke to ${person} today. They are okay and with me.` : "I am okay. I can leave on my own."
     : outcome === "needs_human" ? "I feel dizzy and need a person to call me."
     : outcome === "follow_up" ? "I need help with groceries this week and a pharmacy ride Thursday."
-    : outcome === "needs_ride" ? "I do not have a way to leave quickly on my own."
+    : outcome === "needs_ride" ? "I need a ride to leave."
     : "I am not sure what you mean. The connection is breaking up.";
   const agentText = target === "emergency_contact"
     ? `Hello ${contact}, this is Heartbeat, the automated check-in line. Have you spoken to ${person}, and are they okay?`
@@ -24,22 +24,63 @@ export function buildFakeWebhook(check: Pick<Check, "id" | "last_call_id"> & { c
   const summary = outcome === "no_answer" ? "SIMULATED: reached voicemail."
     : target === "emergency_contact" && outcome === "ok" ? `SIMULATED: ${contact} said, "${userText}"`
     : `SIMULATED: ${userText}`;
+  const turns: { role: "agent" | "user"; content: string }[] = userText
+    ? [{ role: "agent", content: agentText }, { role: "user", content: userText }] : [];
+  const analysis: Record<string, unknown> = {
+    client_status: clientStatus,
+    request: ["needs_human", "follow_up", "needs_ride"].includes(outcome) ? userText : "",
+    needs_ride: outcome === "needs_ride",
+    needs_ride_quote: target === "client" && ["ok", "needs_ride"].includes(outcome) ? userText : "",
+    contact_confirms_ok: target === "emergency_contact" && outcome === "ok",
+  };
+  if (mode === "daily" && target === "client" && outcome !== "no_answer") {
+    const identity = `Yes, this is ${person}.`;
+    turns.splice(0, turns.length,
+      { role: "agent", content: `This is Heartbeat, the automated check-in line. Is this ${person}?` },
+      { role: "user", content: identity },
+      { role: "agent", content: "May I ask your follow-up questions for the nurse to review?" },
+      { role: "user", content: "Yes, you may ask the questions." });
+    Object.assign(analysis, { postop_patient_confirmed: true, postop_identity_quote: identity, postop_pain_score: -1 });
+    for (const field of ["pain", "incision", "fever", "breathing", "appetite", "weight", "medications", "falls"]) analysis[`postop_${field}_quote`] = "";
+    if (["ok", "follow_up", "needs_ride"].includes(outcome)) {
+      const answers = [
+        ["pain", "What is your pain level from zero to ten?", "My pain is 2 out of 10."],
+        ["incision", "Have you noticed changes around your incision?", "I have not noticed redness, swelling, drainage, or bleeding around the incision."],
+        ["fever", "Have you felt feverish or had chills?", "I have not felt feverish or had chills."],
+        ["breathing", "Have you had trouble breathing?", "My breathing feels the same as usual."],
+        ["appetite", "Has your appetite or ability to eat and drink changed?", "My appetite is unchanged, and I am eating and drinking as usual."],
+        ["weight", "Have you noticed a weight change?", "I have not noticed a weight change."],
+        ["medications", "Any difficulty taking your medicines as directed or missed doses?", "I took my prescribed medicines as directed and have no concerns about them."],
+        ["falls", "Have you fallen or nearly fallen?", "I have not fallen or nearly fallen."],
+      ];
+      for (const [field, question, answer] of answers) {
+        turns.push({ role: "agent", content: question }, { role: "user", content: answer });
+        analysis[`postop_${field}_quote`] = answer;
+      }
+      analysis.postop_pain_score = 2;
+      const finalQuestion = outcome === "follow_up"
+        ? "Is there anything else you want the nurse to know?"
+        : "If you needed to leave home quickly, would you need help or could you leave independently?";
+      turns.push({ role: "agent", content: finalQuestion }, { role: "user", content: userText });
+    } else {
+      // An urgent or unclear answer interrupts the questionnaire; all eight
+      // fields remain unknown, and no invented mobility answer can clear a flag.
+      turns.push({ role: "agent", content: "How are you feeling right now?" }, { role: "user", content: userText });
+      analysis.needs_ride_quote = "";
+    }
+  }
   return {
     event: "call_analyzed",
     call: {
       call_id: check.last_call_id,
       call_status: "ended",
       disconnection_reason: outcome === "no_answer" ? "voicemail_reached" : "agent_hangup",
-      transcript: userText ? `Agent: ${agentText}\nUser: ${userText}` : "",
-      transcript_object: userText ? [{ role: "agent", content: agentText }, { role: "user", content: userText }] : [],
+      transcript: turns.map((turn) => `${turn.role === "agent" ? "Agent" : "User"}: ${turn.content}`).join("\n"),
+      transcript_object: turns,
       metadata: { check_id: check.id, target, mode },
       call_analysis: {
         call_summary: summary, in_voicemail: outcome === "no_answer",
-        custom_analysis_data: {
-          client_status: clientStatus,
-          request: ["needs_human", "follow_up", "needs_ride"].includes(outcome) ? userText : "",
-          needs_ride: outcome === "needs_ride", contact_confirms_ok: target === "emergency_contact" && outcome === "ok",
-        },
+        custom_analysis_data: analysis,
       },
     },
   };

@@ -1,9 +1,24 @@
+import type { AcousticAssessment } from "@/lib/acoustic/types";
+import type { NurseTransfer, PostOpAssessment } from "@/lib/postop/types";
+
 // The shared contract. Do not change without telling the team.
 // Mirrors supabase/schema.sql.
 
 export type RiskTier = "red" | "yellow" | "green";
 export type EventMode = "daily" | "crisis";
 export type Urgency = "urgent" | "follow_up";
+
+// Suggested operator review order, never an automated medical/dispatch decision.
+export type CallerAssessment = {
+  priority: "immediate" | "urgent" | "follow_up" | "review";
+  situation: "immediate_danger" | "needs_assistance" | "routine" | "unknown";
+  distress: "high" | "moderate" | "unknown";
+  audible_distress: "unavailable" | "elevated" | "uncertain";
+  transcript_sentiment: "Positive" | "Negative" | "Neutral" | "Unknown" | null;
+  evidence: { kind: "situation" | "distress"; quote: string }[];
+  reasons: string[];
+  stage: "live" | "post_call";
+};
 
 export type CheckStatus =
   | "queued"
@@ -56,6 +71,10 @@ export type Check = {
   updated_at: string;
   urgency: Urgency | null;
   sms_status: string | null;
+  priority_assessment?: CallerAssessment | null;
+  acoustic_assessment?: AcousticAssessment | null;
+  postop_assessment?: PostOpAssessment | null;
+  nurse_transfer?: NurseTransfer | null;
 };
 
 export type CheckWithClient = Check & { client: Client };
@@ -73,6 +92,7 @@ export type CheckPatch = Partial<
     | "handled_at"
     | "urgency"
     | "sms_status"
+    | "priority_assessment"
   >
 >;
 
@@ -97,13 +117,15 @@ export type CallMetadata = {
 };
 
 // The subset of the Retell webhook call object we read.
-// TODO(Mikey): confirm field names against Retell docs.
+// Retell transcript updates can contain tool entries; only user turns are evidence.
 export type RetellCall = {
   call_id: string;
   call_status?: string;
   disconnection_reason?: string;
+  recording_multi_channel_url?: string;
   transcript?: string;
-  transcript_object?: { role: string; content: string }[];
+  transcript_object?: { role: string; content: string; words?: { start?: number; end?: number; word?: string }[] }[];
+  transcript_with_tool_calls?: { role: string; content?: string }[];
   metadata?: CallMetadata;
   call_analysis?: {
     call_summary?: string;
@@ -114,7 +136,7 @@ export type RetellCall = {
   };
 };
 
-export type RetellWebhookEvent = "call_started" | "call_ended" | "call_analyzed";
+export type RetellWebhookEvent = "call_started" | "transcript_updated" | "call_ended" | "call_analyzed";
 
 export type RetellWebhookPayload = {
   event: RetellWebhookEvent;
@@ -128,6 +150,7 @@ export type ClassifierResult = {
   summary: string;
   flag_reason: string | null;
   urgency?: Urgency | null;
+  priority_assessment?: CallerAssessment;
 };
 
 export type ClassifierContext = { mode: EventMode; target?: CallTarget; contactName?: string };

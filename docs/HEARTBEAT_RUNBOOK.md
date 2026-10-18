@@ -24,7 +24,7 @@ npx tsx scripts/fake-webhook.ts "Rosa Alvarez" needs_human
 npx tsx scripts/fake-webhook.ts "Walter Brooks" no_answer
 ```
 
-Ordinary requests become amber **Follow up** cards. Danger words in the person's own speech become red **Needs a human now** and trigger a logged simulated coordinator text. Words in the agent's questions cannot trigger the hard rules. All simulated summaries are labeled.
+Answered daily patient calls become amber **Follow up** cards for nurse review, including calls whose overall report is okay. Expand **Answers & patient quotes**, inspect the prior-call comparison, and record the reviewing nurse before **Approve next step**. Approval records the review; **Mark handled** separately records human takeover. Reported danger triggers **Needs a human now** and a logged simulated coordinator text. All simulated summaries are labeled.
 
 ## Crisis round
 
@@ -38,7 +38,7 @@ Repeated payloads are deduplicated. Results from old call attempts are ignored. 
 
 ## Real phones
 
-Read [RETELL_AGENTS.md](RETELL_AGENTS.md) for exact English/Korean prompts, required analysis fields, setup script, and private seed format. Supply Retell credentials and dedicated daily/crisis agent IDs, plus `HEARTBEAT_PUBLIC_URL` for signed callbacks. Check-in agents have no research or custom tools.
+Read [RETELL_AGENTS.md](RETELL_AGENTS.md) for exact English/Korean prompts, required analysis fields, setup script, and private seed format. Supply Retell credentials and distinct dedicated daily/crisis agent IDs, `HEARTBEAT_PUBLIC_URL` for signed callbacks, and `ON_CALL_NURSE_PHONE` for the fixed transfer destination. Check-in agents have no research or custom tools. The built-in transfer tool privately briefs the on-call line, introduces the caller, and leaves. Failed or unconfirmed transfers remain open. Verify that full sequence with consenting teammates before calling it a live demo.
 
 Use `scripts/seed.local.json` for consenting participants; it is gitignored. The seeder saves fictional display identities. Anonymous dashboard reads use `clients_public`, which omits telephone numbers. Set `MOCK_RETELL=false` only for the real call rehearsal. Real calling refuses the fictional 555 roster.
 
@@ -46,7 +46,7 @@ Twilio needs its account SID, token, sender, and `COORDINATOR_PHONE`. Missing SM
 
 ## P1 planning, Korean, and map
 
-A confirmed daily client result (`ok` or `needs_help`) with an explicit `needs_ride` boolean updates the planning flag and records `last_daily_at`. An unclear answer or absent field preserves the previous flag, and emergency-contact answers cannot change it. To rehearse, start a fresh morning round and run:
+A daily patient result requires confirmed identity before updating `last_daily_at`. The ride flag additionally requires an exact patient quote explicitly supporting the `needs_ride` boolean. Unasked, ambiguous, or unsupported answers preserve the saved flag; emergency contacts cannot change it. To rehearse, start a fresh morning round and run:
 
 ```bash
 npx tsx scripts/fake-webhook.ts "Harold Kim" needs_ride
@@ -77,9 +77,25 @@ npm run verify:heartbeat
 
 The integration verifier requires explicit mock mode and demo scale 0.05. It runs both modes against the configured Supabase instance and local HTTP routes, writes only fictional events, and saves a compact report in `output/heartbeat/verification.json`. Browser screenshots belong in `output/heartbeat/`.
 
-Completed P0 integration evidence: both daily and crisis passed with **12 assertions and 20 persisted state snapshots per mode**, each finishing in approximately **80.3 seconds** while their timers ran concurrently. The report verifies client okay, duplicate/stale results, urgent danger, ordinary daily follow-up without coordinator SMS, handled/late results, one successful concurrent advance, all four due-time ladder steps, named emergency-contact confirmation, start-request idempotency, and abandoned-claim handoff without redial. Anonymous `clients` reads returned no rows; `clients_public` retained the fictional roster without phone columns. No real calls or texts were sent.
+Earlier P0 integration evidence, before the post-op change: both daily and crisis passed with **12 assertions and 20 persisted state snapshots per mode**, each finishing in approximately **80.3 seconds** while their timers ran concurrently. The report verifies client okay, duplicate/stale results, urgent danger, ordinary daily follow-up without coordinator SMS, handled/late results, one successful concurrent advance, all four due-time ladder steps, named emergency-contact confirmation, start-request idempotency, and abandoned-claim handoff without redial. Anonymous `clients` reads returned no rows; `clients_public` retained the fictional roster without phone columns. No real calls or texts were sent.
 
-Final automated checks passed: **87 voice tests and 30 Heartbeat tests**, plus typecheck, ESLint, and the Next.js production build. The focused HTTP/database planning regression confirms an unclear answer cannot erase a known ride need, while confirmed false and true answers persist. A subsequent crisis event dispatched Harold first within the high-risk tier because of his recorded ride need. Evidence is in `daily-planning-verification.json` and `ride-priority.json` under `output/heartbeat/`. Real-provider rehearsal remains unverified.
+That earlier baseline also passed **87 voice tests and 30 Heartbeat tests**, plus typecheck, ESLint, and the Next.js production build. The focused HTTP/database planning regression confirmed an unclear answer could not erase a known ride need, while confirmed false and true answers persisted. Evidence is in `daily-planning-verification.json` and `ride-priority.json` under `output/heartbeat/`.
+
+### Post-op rehearsal, October 17
+
+Migration `202610170006_postop_checkins.sql` is applied to the existing local database. The current dashboard is [127.0.0.1:3018](http://127.0.0.1:3018); the pre-existing server on 3017 was left running.
+
+```bash
+POSTOP_APP_URL=http://127.0.0.1:3018 npm run verify:postop
+# Retain isolated fictional comparison and failed-transfer cards:
+POSTOP_APP_URL=http://127.0.0.1:3018 npm run verify:postop -- --keep
+```
+
+The isolated verifier passed **10 scenarios** against real HTTP routes and local Supabase: exact quotes, pain 3→7, unknown/fabricated answers, identity protection, approval persistence/idempotency/races, stale and handled guards, late no-answer after transfer, and crisis/contact transfer separation. It never starts roster-wide calls. See `output/postop/verification.json`. Browser verification confirmed all eight quotes, the comparison, a saved nurse approval surviving reload, and the failed-transfer card; proof is `output/postop/dashboard-verified.jpg`.
+
+Current automated checks passed: **96 voice tests and 85 Heartbeat tests**, TypeScript, ESLint, and the Next.js production build. Clear ordinary denials are covered without suppressing affirmative danger after a contrast or uncertainty.
+
+Live verification remains pending: dedicated daily/crisis agent IDs, the public callback URL, and the on-call destination must be supplied. Retell transfer configuration and simulated provider events do not establish that a real whisper, introduction, or AI exit worked. No real calls or texts were sent during this build.
 
 ## Limits
 

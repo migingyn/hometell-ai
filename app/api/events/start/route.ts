@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { fail, ok } from "@/lib/api";
-import { placeCall } from "@/lib/retell";
+import { getHeartbeatCallingReadiness, placeCall } from "@/lib/retell";
 import { supabaseAdmin } from "@/lib/supabase";
 import { config } from "@/lib/config";
 import { normalizeMode } from "@/lib/mode";
@@ -20,9 +20,8 @@ export async function POST(req: Request) {
   const mode = normalizeMode(parsed.data.type);
   if (mode === "crisis" && !parsed.data.alert_text) return fail("Paste the official alert before starting a crisis check.");
   if (!config.mockRetell) {
-    const agent = mode === "daily" ? process.env.RETELL_DAILY_AGENT_ID : process.env.RETELL_CRISIS_AGENT_ID;
-    if (!process.env.RETELL_API_KEY || !process.env.RETELL_FROM_NUMBER || !(agent || process.env.RETELL_AGENT_ID)) {
-      return fail("Real calling is not configured. Add the Retell key, number, and check-in agent IDs, or explicitly enable MOCK_RETELL for rehearsal.", 503);
+    if (!getHeartbeatCallingReadiness(mode).configured) {
+      return fail("Real calling is not configured. Add the Retell key, E.164 number, and a separate dedicated agent ID for this check-in mode, or explicitly enable MOCK_RETELL for rehearsal.", 503);
     }
   }
   try {

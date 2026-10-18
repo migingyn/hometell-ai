@@ -20,6 +20,7 @@ export function applyCallResult(check: Check, result: ClassifierResult, target: 
       ? `Confirmed okay by emergency contact: ${result.summary}` : result.summary,
     flag_reason: result.flag_reason,
     urgency: result.status === "needs_human" ? result.urgency ?? "urgent" : null,
+    ...(result.priority_assessment ? { priority_assessment: result.priority_assessment } : {}),
     next_action_at: result.status === "no_answer" ? nextActionAt() : null,
   };
 }

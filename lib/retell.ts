@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import Retell from "retell-sdk";
 import { config } from "@/lib/config";
-import type { CallMetadata, CallTarget, Client, HeartbeatEvent } from "@/lib/types";
+import type { CallMetadata, CallTarget, Client, EventMode, HeartbeatEvent } from "@/lib/types";
 
 export type PlaceCallInput = {
   client: Client;
@@ -35,6 +35,37 @@ export type PhoneCallRecord = {
 
 const E164 = /^\+[1-9]\d{7,14}$/;
 const API = "https://api.retellai.com";
+const HEARTBEAT_AGENT_KEYS = ["RETELL_DAILY_AGENT_ID", "RETELL_CRISIS_AGENT_ID", "RETELL_DAILY_KO_AGENT_ID", "RETELL_CRISIS_KO_AGENT_ID"] as const;
+
+/** Heartbeat must never fall through to a generic research or prescription agent. */
+export function resolveHeartbeatAgentId(mode: EventMode, language = "en"): string {
+  const prefix = mode === "daily" ? "RETELL_DAILY" : "RETELL_CRISIS";
+  const baseKey = `${prefix}_AGENT_ID`;
+  const baseId = requireEnv(baseKey);
+  const koreanKey = `${prefix}_KO_AGENT_ID`;
+  const key = language === "ko" && process.env[koreanKey]?.trim() ? koreanKey : baseKey;
+  const id = key === baseKey ? baseId : process.env[key]!.trim();
+  if (["RETELL_AGENT_ID", ...HEARTBEAT_AGENT_KEYS].some((other) => other !== key && process.env[other]?.trim() === id)) {
+    throw new Error(`${key} must identify a separate dedicated check-in agent, not a generic, other mode, or other language agent.`);
+  }
+  return id;
+}
+
+/** Configuration check only. It intentionally excludes private IDs and provider requests. */
+export function getHeartbeatCallingReadiness(mode?: EventMode) {
+  const missing = ["RETELL_API_KEY", "RETELL_FROM_NUMBER"].filter((key) => !process.env[key]?.trim());
+  const invalid: string[] = [];
+  for (const item of mode ? [mode] : ["daily", "crisis"] as const) {
+    const key = item === "daily" ? "RETELL_DAILY_AGENT_ID" : "RETELL_CRISIS_AGENT_ID";
+    if (!process.env[key]?.trim()) { missing.push(key); continue; }
+    try {
+      resolveHeartbeatAgentId(item);
+      if (process.env[item === "daily" ? "RETELL_DAILY_KO_AGENT_ID" : "RETELL_CRISIS_KO_AGENT_ID"]?.trim()) resolveHeartbeatAgentId(item, "ko");
+    } catch { invalid.push(`${key}: use separate dedicated agents for each mode/language and the generic agent`); }
+  }
+  if (process.env.RETELL_FROM_NUMBER?.trim() && !E164.test(process.env.RETELL_FROM_NUMBER.trim())) invalid.push("RETELL_FROM_NUMBER: E.164 required");
+  return { configured: !missing.length && !invalid.length, missing, invalid };
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -138,9 +169,7 @@ export async function placeCall(input: PlaceCallInput): Promise<PlaceCallResult>
     throw new Error("A crisis call requires the coordinator's official alert text.");
   }
   const language = input.client.language === "ko" ? "ko" : "en";
-  const prefix = mode === "daily" ? "RETELL_DAILY" : "RETELL_CRISIS";
-  const agentId = (language === "ko" ? process.env[`${prefix}_KO_AGENT_ID`] : undefined) ||
-    process.env[`${prefix}_AGENT_ID`] || process.env.RETELL_AGENT_ID;
+  const agentId = resolveHeartbeatAgentId(mode, language);
   return createPhoneCall({
     toNumber: toNumber(input),
     agentId,

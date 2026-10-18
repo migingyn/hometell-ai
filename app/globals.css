@@ -128,3 +128,63 @@
     @apply font-sans;
   }
 }
+
+/* Agency post-op call record. Scoped to the existing Heartbeat dashboard. */
+.hb-postop {
+  border: 1px solid var(--hb-border);
+  border-radius: 5px;
+  background: #101e254d;
+  margin-bottom: 16px;
+  padding: 13px;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.hb-postop-title, .hb-postop-heading { display: flex; align-items: center; gap: 7px; }
+.hb-postop-title { justify-content: space-between; gap: 12px; }
+.hb-postop-heading { color: var(--hb-mint); font-weight: 500; }
+.hb-postop-title > span:last-child { color: var(--hb-muted); font-size: 9px; white-space: nowrap; }
+.hb-postop-empty p { color: var(--hb-faint); margin: 8px 0 0; }
+.hb-postop-identity { color: var(--hb-amber); margin: 8px 0 0; font-size: 10px; }
+.hb-postop-answers { margin-top: 9px; }
+.hb-postop-answers summary { cursor: pointer; color: var(--hb-muted); padding: 4px 0; }
+.hb-postop-answers summary svg { display: inline-block; margin-left: 5px; vertical-align: middle; }
+.hb-postop-answers[open] summary svg { transform: rotate(180deg); }
+.hb-postop-answers dl { margin: 9px 0 0; }
+.hb-postop-answers dl > div { border-top: 1px solid #ffffff12; padding: 9px 0; }
+.hb-postop-answers dt { font-size: 10px; color: var(--hb-muted); }
+.hb-postop-answers dd { margin: 3px 0 0; color: var(--hb-text); }
+.hb-postop-answers blockquote { margin: 3px 0 0; }
+.hb-postop-answers dd strong { display: block; color: var(--hb-mint); font-weight: 500; }
+.hb-postop-unknown dd { color: var(--hb-faint); font-size: 10px; }
+.hb-postop-changes { border-top: 1px solid #ffffff12; margin-top: 10px; padding-top: 11px; }
+.hb-postop-label { display: block; color: var(--hb-muted); font-size: 9px; line-height: 1.6; }
+.hb-postop-changes p { color: var(--hb-faint); font-size: 10px; margin: 5px 0 0; }
+.hb-postop-changes ul { list-style: none; margin: 7px 0 0; padding: 0; }
+.hb-postop-changes li + li { margin-top: 9px; }
+.hb-postop-changes li > * { display: block; }
+.hb-postop-changes li strong { color: var(--hb-amber); font-weight: 500; }
+.hb-postop-changes li span { font-size: 10px; }
+.hb-postop-before { color: var(--hb-faint); }
+.hb-postop-review { border-top: 1px solid #ffffff12; margin-top: 11px; padding-top: 11px; }
+.hb-postop-review > strong { display: block; margin-top: 5px; font-weight: 500; color: var(--hb-text); }
+.hb-postop-review > p { margin: 5px 0 0; color: var(--hb-muted); font-size: 10px; }
+.hb-postop-review form { margin-top: 12px; display: grid; grid-template-columns: minmax(0,1fr); gap: 6px; }
+.hb-postop-review label { font-size: 9px; color: var(--hb-muted); }
+.hb-postop-review input { width: 100%; min-width: 0; border: 1px solid var(--hb-border); background: #101e25; border-radius: 3px; padding: 8px 9px; font: inherit; font-size: 11px; color: var(--hb-text); }
+.hb-postop-review input::placeholder { color: var(--hb-faint); }
+.hb-app .hb-postop-review button { display: flex; justify-content: center; align-items: center; gap: 8px; border: 1px solid var(--hb-mint); border-radius: 3px; background: var(--hb-mint); color: #193026; padding: 9px; font-size: 10px; }
+.hb-postop-review > small { display: block; margin-top: 10px; color: var(--hb-faint); font-size: 9px; line-height: 1.7; }
+.hb-postop-review .hb-postop-review-receipt { display: flex; align-items: center; gap: 6px; color: var(--hb-mint); }
+.hb-postop-approved > .hb-postop-label { color: var(--hb-mint); }
+.hb-postop-review .hb-postop-review-error { color: var(--hb-red); }
+.hb-postop :is(input,summary):focus-visible { outline: 2px solid var(--hb-mint); outline-offset: 3px; }
+.hb-transfer-status { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 13px; padding: 9px 10px; border: 1px solid var(--hb-border); border-radius: 4px; color: var(--hb-amber); font-size: 10px; line-height: 1.6; }
+.hb-transfer-status svg { flex-shrink: 0; margin-top: 2px; }
+.hb-transfer-connected { color: var(--hb-mint); }
+@media (max-width: 1050px) {
+  .hb-daily .hb-roster-heading { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 600px) {
+  .hb-daily .hb-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

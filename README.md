@@ -1,8 +1,10 @@
 # Heartbeat
 
-Daily check-ins and crisis outreach for an agency's enrolled clients. A coordinator starts a round, records what clients or their listed emergency contacts actually report, and follows unanswered calls through retry → text → emergency contact → human handoff.
+Post-operative check-ins and crisis outreach for a clinical home-health agency's enrolled patients. A nurse or coordinator uses one website; patients answer their regular phones. The same roster, Retell agents, and Supabase records support both modes.
 
-**Run morning check-ins** collects ordinary requests as amber follow-ups. Danger phrases in the person's own words trigger an urgent human handoff in either mode. **Start crisis check** takes a coordinator-supplied alert for the agent to read verbatim; crisis help requests are urgent. Heartbeat does not make medical or evacuation decisions or dispatch emergency services.
+**Run morning check-ins** collects pain, incision, fever, breathing, appetite, weight, medications, and falls. Cards show exact patient quotes, missing answers, changes since the previous call, and a proposed next step for nurse approval. Reported severity sorts before expressed distress; distress only advances review within the same severity tier. **Start crisis check** reads the coordinator's alert verbatim and retains the unanswered-call ladder and evacuation-help flags. Heartbeat does not diagnose, give medical advice, make evacuation decisions, or dispatch emergency services.
+
+For the current build, see [the one-page plan](docs/POSTOP_PLAN.md) and [customer and funding note](docs/HOME_HEALTH_CUSTOMER_NOTE.md). Migration `202610170006_postop_checkins.sql` adds post-op records, atomic nurse approval, and phone-transfer state without replacing the roster.
 
 The working local rehearsal uses actual Supabase persistence and HTTP routes with explicitly simulated call results. No real Retell calls or Twilio delivery have been verified. See [the product scope](PRD.md), [rehearsal runbook](docs/HEARTBEAT_RUNBOOK.md), and [exact English/Korean agent prompts](docs/RETELL_AGENTS.md).
 
@@ -45,9 +47,11 @@ The separate read-only [LA map](http://localhost:5175/heartbeat) reads the same 
 
 ## Real-phone setup
 
-Follow [RETELL_AGENTS.md](docs/RETELL_AGENTS.md) to configure and review dedicated daily/crisis drafts, publish them in Retell, and provide a public HTTPS callback endpoint. Check-in agents have no internet research or custom tools. Use gitignored `scripts/seed.local.json` for consenting teammates; display identities remain fictional. Set `MOCK_RETELL=false` only for an authorized real-phone rehearsal. Live calling rejects the fictional 555 roster.
+Follow [RETELL_AGENTS.md](docs/RETELL_AGENTS.md) to configure and review dedicated daily/crisis drafts, publish them in Retell, and provide a public HTTPS callback endpoint. Set `ON_CALL_NURSE_PHONE` for the predefined warm-transfer destination: private summary, three-way introduction, then the AI leaves. Failed or unconfirmed transfers remain open for human follow-up. Human detection confirms an answer, not the recipient's identity. There is no dashboard live-join feature. Check-in agents have no internet research or custom tools. Use gitignored `scripts/seed.local.json` for consenting teammates; display identities remain fictional. Set `MOCK_RETELL=false` only for an authorized real-phone rehearsal. Live calling rejects the fictional 555 roster.
 
 The dashboard reads `clients_public`, which omits telephone numbers; the server uses the private roster. Optional research and delegated-contact tools are documented separately in [live voice setup](docs/LIVE_VOICE.md) and are excluded from the check-in path.
+
+The consumer [prescription case room](docs/PRESCRIPTION_DEMO.md) runs at `http://localhost:5175/prescription`: inspect conflicting source statements, confirm receipt-linked handoffs, and reopen the case when evidence changes. Its live participant rooms work locally without provider keys; optional phone calling reports its actual configuration readiness.
 
 ## Verify
 
@@ -58,8 +62,11 @@ npm run build
 npm run test:voice
 npm run test:heartbeat
 npm run verify:heartbeat
+npm run verify:postop
 ```
 
 The integration verifier requires explicit mock mode, a seeded local database, the running dashboard server, and demo scale `0.05`. It verifies both modes against actual Supabase and HTTP routes and saves phone-free evidence to `output/heartbeat/verification.json`. See the [runbook verification record](docs/HEARTBEAT_RUNBOOK.md#verification) for completed checks and remaining live-provider limits.
+
+The post-op verifier uses its own fictional patients, actual HTTP routes, and local Supabase. Run `POSTOP_APP_URL=http://127.0.0.1:3018 npm run verify:postop`; add `-- --keep` to retain the comparison card for a demo. It tests exact quotes, pain 3→7, unknown answers, approval protections, and transfer outcomes. Its report is `output/postop/verification.json`. No real calls or texts are sent.
 
 The open dashboard drives follow-up ticks. This hackathon build has no hosted scheduler, login, or automatic emergency dispatch.
