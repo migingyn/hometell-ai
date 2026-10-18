@@ -1,5 +1,7 @@
 # Heartbeat
 
+**[Open the live Heartbeat demo](https://heartbeat-demo-three.vercel.app/)**
+
 AI phone desk for a private home care center. Every day the AI calls each resident, asks the nurse's check-in questions, reminds them about medication exactly as the nurse wrote it, and alerts the front desk when something is wrong. In a local disaster it calls every resident, highest vitals risk first, and flags hard when someone needs help or does not respond.
 
 This repo is the backend: Next.js route handlers on Supabase, calling through Retell AI. The frontend builds against [API.md](API.md). All status and alert decisions are plain if-statements in `lib/`, with no AI.
